@@ -5,11 +5,13 @@ Status: Draft, pending user review
 
 ## Purpose
 
-A multi-agent stock trading system. A panel of analyst sub-agents with distinct
-viewpoints produces structured verdicts on a watchlist. A synthesizer merges them
-into a cohesive thesis. A separate executor agent trades against that thesis during
-US extended-hours sessions (pre-market 4:00–9:30 AM ET, after-hours 4:00–8:00 PM ET).
-All behavior is tunable through a single config file.
+A multi-agent stock trading system. There is no user watchlist: the system
+discovers its own candidates. A panel of analyst sub-agents with distinct
+viewpoints first nominates tickers from purview-matched market scans, then
+produces structured verdicts on the combined candidate set. A synthesizer merges
+verdicts into a cohesive thesis. A separate executor agent trades against that
+thesis during US extended-hours sessions (pre-market 4:00–9:30 AM ET,
+after-hours 4:00–8:00 PM ET). All behavior is tunable through a single config file.
 
 ## Non-negotiable requirements
 
@@ -30,9 +32,12 @@ All behavior is tunable through a single config file.
 
 ## Stack
 
-- TypeScript, Node 22+, pnpm
-- Claude Agent SDK for agent orchestration (analysts, synthesizer, executor)
+- TypeScript, Node 22+, pnpm, ESM
+- `@anthropic-ai/sdk` for agent calls. Analysts do not need autonomous tool loops
+  in v1: code fetches their data (bars, news, fundamentals) and hands it to them;
+  forced tool-use gives structured verdicts. Agent SDK is a future option.
 - Alpaca REST API: trading (paper/live) + market data (IEX feed) + news
+- Express API server + React 19/Vite frontend (dashboard)
 - Scheduling: launchd (macOS) or cron; each entry point is also runnable manually
 - Vitest for tests
 
@@ -42,7 +47,10 @@ Two decoupled stages connected by an artifact file.
 
 ```
 [Evening pipeline — daily ~5:00 PM ET]
-  watchlist ──► 5 analyst sub-agents (parallel) ──► synthesizer ──► out/thesis-YYYY-MM-DD.json
+  market scans ──► Round 1: 5 analysts nominate candidates (parallel)
+               ──► code: dedupe + liquidity filter + cap ──► candidate set
+               ──► Round 2: 5 analysts render verdicts on all candidates (parallel)
+               ──► synthesizer ──► out/thesis-YYYY-MM-DD.json
 
 [Executor loop — every N min, only inside enabled extended-hours windows]
   thesis.json + live quotes ──► executor agent ──► risk gate (plain code) ──► BrokerClient ──► Alpaca
@@ -53,9 +61,28 @@ file is the only contract between them.
 
 ## Components
 
-### 1. Analyst sub-agents
+### 0. Candidate discovery (Round 1)
 
-Five parallel agents, same watchlist, distinct system prompts and data purviews:
+No user watchlist. Code fetches purview-matched scans from Alpaca market data —
+top movers (gainers/losers), most-actives by volume, and the news feed — plus
+daily bars for context. Each analyst receives the scans relevant to its purview
+and nominates up to `nominations_per_agent` (default 5) tickers, each with a
+one-line reason: `{ticker, reason}`.
+
+Code then builds the candidate set deterministically:
+- union of nominations, deduped (nomination count retained as a signal)
+- liquidity filter: last price ≥ `min_price`, 20-day avg dollar volume ≥
+  `min_avg_dollar_volume`
+- drop anything on the user's `exclude` list
+- cap at `max_candidates` (default 15), ranked by nomination count, then avg
+  dollar volume
+
+Candidates and their nominators/reasons are written to
+`out/candidates-YYYY-MM-DD.json` for the audit trail and frontend.
+
+### 1. Analyst sub-agents (Round 2)
+
+Five parallel agents, same candidate set, distinct system prompts and data purviews:
 
 | Agent       | Purview |
 |-------------|---------|
@@ -129,7 +156,12 @@ Any failure → order rejected and logged with reason.
 ```yaml
 mode: paper                  # dry-run | paper | live
 live_trading_acknowledged: false
-watchlist: [AAPL, NVDA, MSFT]
+universe:
+  nominations_per_agent: 5
+  max_candidates: 15
+  min_price: 5
+  min_avg_dollar_volume: 20000000
+  exclude: []            # tickers the system must never trade
 sessions: {premarket: true, afterhours: true}
 agent_weights: {fundamental: 1.0, technical: 0.8, macro: 0.6, sentiment: 1.0, bear: 1.2}
 conviction_threshold: 0.65
@@ -150,6 +182,41 @@ model:
 Credentials live in `.env` (gitignored): `ALPACA_PAPER_KEY`, `ALPACA_PAPER_SECRET`,
 and later `ALPACA_LIVE_KEY`, `ALPACA_LIVE_SECRET`. Paper and live keys are never
 interchangeable slots.
+
+### 6. Frontend (basic dashboard)
+
+React 19 + Vite + TypeScript single-page app, served by an Express API server
+(`src/server.ts`) that also exposes the system's state. Read-mostly; the one
+write surface is config editing.
+
+Views:
+- **Status bar:** mode badge (DRY-RUN / PAPER / LIVE), current session
+  (pre-market / RTH / after-hours / closed), kill-switch state, account equity.
+- **Candidates panel:** today's discovered candidates — who nominated each
+  ticker and why, which survived the liquidity filter/cap.
+- **Thesis panel:** current thesis per ticker — direction, weighted conviction,
+  limit band, narrative, invalidation conditions, expiry.
+- **Verdicts panel:** per-analyst verdicts behind each thesis (the "why").
+- **Positions & orders:** open positions, working/filled/rejected orders with
+  risk-gate rejection reasons.
+- **Audit feed:** tail of today's audit JSONL, newest first.
+- **Config editor:** form bound to `config.yaml` fields (weights, thresholds,
+  caps, sessions, universe filters, exclude list, interval). Validated
+  server-side with the same schema the system uses. `mode` and
+  `live_trading_acknowledged` are displayed but NOT editable from the UI —
+  switching to live requires editing the file by hand. Config changes take
+  effect on the next pipeline run / executor tick.
+- **Actions:** "Run pipeline now", "Executor tick now", "Halt" / "Resume"
+  (kill switch). Halt/Resume writes a state file the executor checks.
+
+API (Express, port 4310):
+- `GET /api/status`, `GET /api/candidates`, `GET /api/thesis`, `GET /api/verdicts`,
+  `GET /api/positions`, `GET /api/orders`, `GET /api/audit?limit=N`
+- `GET /api/config`, `PUT /api/config` (schema-validated; mode/ack immutable via API)
+- `POST /api/pipeline/run`, `POST /api/executor/tick`, `POST /api/halt`, `POST /api/resume`
+
+The server never holds trading logic; it shells out to the same entry points the
+scheduler uses and reads the same files (`out/thesis-*.json`, audit logs, state).
 
 ## Error handling
 
@@ -173,4 +240,4 @@ interchangeable slots.
 - Intraday regular-hours trading
 - Backtesting framework beyond replay mode
 - Portfolio optimization across theses
-- Any UI; config file + audit log only
+- Auth on the dashboard (localhost only), websockets/live push (poll instead)
