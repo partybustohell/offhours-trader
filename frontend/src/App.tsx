@@ -77,19 +77,25 @@ export default function App() {
         <StatusBar status={status} lastUpdated={lastUpdated} offline={offline} />
         <ActionsBar halted={status?.halt?.halted === true} onRefresh={refresh} />
       </header>
-      <main className="grid">
-        <ThesisPanel thesis={thesis} />
-        <CandidatesPanel data={candidates} />
-        <VerdictsPanel data={verdicts} />
-        <PositionsOrders
-          positions={positions.positions}
-          positionsError={positions.error}
-          orders={orders.orders}
-          ordersError={orders.error}
-          audit={audit}
-        />
-        <AuditFeed events={audit} />
-        <ConfigEditor config={config} onSaved={refresh} />
+      <main className="workspace">
+        <section className="col col-thesis">
+          <ThesisPanel thesis={thesis} />
+          <VerdictsPanel data={verdicts} />
+        </section>
+        <section className="col col-market">
+          <CandidatesPanel data={candidates} />
+          <PositionsOrders
+            positions={positions.positions}
+            positionsError={positions.error}
+            orders={orders.orders}
+            ordersError={orders.error}
+            audit={audit}
+          />
+          <AuditFeed events={audit} />
+        </section>
+        <section className="col col-config">
+          <ConfigEditor config={config} onSaved={refresh} />
+        </section>
       </main>
     </div>
   );
