@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "dashboard",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["serve"],
+      "port": 4310,
+      "cwd": "/Users/shivbrahmbhatt/offhours-trader"
+    }
+  ]
+}

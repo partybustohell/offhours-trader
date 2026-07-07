@@ -100,8 +100,9 @@ export async function fetchPositions(): Promise<PositionsResponse> {
   const raw = await getJson('/api/positions');
   if (Array.isArray(raw)) return { positions: raw as Position[] };
   if (isObj(raw)) {
+    const list = Array.isArray(raw.items) ? raw.items : raw.positions;
     return {
-      positions: Array.isArray(raw.positions) ? (raw.positions as Position[]) : [],
+      positions: Array.isArray(list) ? (list as Position[]) : [],
       error: typeof raw.error === 'string' ? raw.error : undefined,
     };
   }
@@ -112,8 +113,9 @@ export async function fetchOrders(): Promise<OrdersResponse> {
   const raw = await getJson('/api/orders');
   if (Array.isArray(raw)) return { orders: raw as BrokerOrder[] };
   if (isObj(raw)) {
+    const list = Array.isArray(raw.items) ? raw.items : raw.orders;
     return {
-      orders: Array.isArray(raw.orders) ? (raw.orders as BrokerOrder[]) : [],
+      orders: Array.isArray(list) ? (list as BrokerOrder[]) : [],
       error: typeof raw.error === 'string' ? raw.error : undefined,
     };
   }
@@ -122,7 +124,13 @@ export async function fetchOrders(): Promise<OrdersResponse> {
 
 export async function fetchAudit(limit = 100): Promise<AuditEvent[]> {
   const raw = await getJson(`/api/audit?limit=${limit}`);
-  const arr = Array.isArray(raw) ? raw : isObj(raw) && Array.isArray(raw.events) ? raw.events : [];
+  const arr = Array.isArray(raw)
+    ? raw
+    : isObj(raw) && Array.isArray(raw.items)
+      ? raw.items
+      : isObj(raw) && Array.isArray(raw.events)
+        ? raw.events
+        : [];
   const events: AuditEvent[] = [];
   for (const e of arr) {
     if (!isObj(e)) continue;
