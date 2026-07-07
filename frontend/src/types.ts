@@ -1,0 +1,147 @@
+// Mirrors the backend contract in ../../src/types.ts and the config shape in
+// ../../src/config.ts. Copied, not imported: the frontend is a separate package.
+
+export type Mode = 'dry-run' | 'paper' | 'live';
+export type Direction = 'long' | 'short' | 'none';
+export type AnalystName = 'fundamental' | 'technical' | 'macro' | 'sentiment' | 'bear';
+export const ANALYSTS: AnalystName[] = ['fundamental', 'technical', 'macro', 'sentiment', 'bear'];
+export type Session = 'premarket' | 'rth' | 'afterhours' | 'closed';
+
+export interface Candidate {
+  ticker: string;
+  nominatedBy: { analyst: AnalystName; reason: string }[];
+  lastPrice: number;
+  avgDollarVolume20d: number;
+}
+export interface CandidateFile {
+  date: string;
+  candidates: Candidate[];
+  rejected: { ticker: string; reason: string }[];
+}
+
+export interface Verdict {
+  analyst: AnalystName;
+  ticker: string;
+  direction: Direction;
+  conviction: number;
+  horizon: 'days' | 'weeks';
+  evidence: string[];
+  invalidation_conditions: string[];
+}
+export interface VerdictFile {
+  date: string;
+  verdicts: Verdict[];
+  droppedAnalysts: AnalystName[];
+}
+
+export interface ThesisEntry {
+  ticker: string;
+  direction: 'long' | 'short';
+  weightedConviction: number;
+  limitBand: { low: number; high: number };
+  targetNotionalUsd: number;
+  narrative: string;
+  invalidationConditions: string[];
+}
+export interface Thesis {
+  date: string;
+  generatedAt: string;
+  expiresAt: string;
+  entries: ThesisEntry[];
+  skipped: { ticker: string; reason: string }[];
+}
+
+export interface Position {
+  ticker: string;
+  qty: number;
+  avgEntryPrice: number;
+  marketValue: number;
+  unrealizedPl: number;
+  side: 'long' | 'short';
+}
+export interface BrokerOrder {
+  id: string;
+  ticker: string;
+  side: 'buy' | 'sell';
+  qty: number;
+  limitPrice: number;
+  status: string;
+  submittedAt: string;
+}
+
+export interface HaltState {
+  halted: boolean;
+  reason: string;
+  at: string;
+}
+
+export type AuditKind =
+  | 'nomination'
+  | 'candidates'
+  | 'verdict'
+  | 'thesis'
+  | 'tick'
+  | 'proposed_order'
+  | 'order_placed'
+  | 'order_rejected'
+  | 'exit'
+  | 'halt'
+  | 'resume'
+  | 'error';
+export interface AuditEvent {
+  ts: string;
+  kind: AuditKind;
+  data: unknown;
+}
+
+export interface Config {
+  mode: Mode;
+  live_trading_acknowledged: boolean;
+  universe: {
+    nominations_per_agent: number;
+    max_candidates: number;
+    min_price: number;
+    min_avg_dollar_volume: number;
+    exclude: string[];
+  };
+  sessions: {
+    premarket: boolean;
+    afterhours: boolean;
+  };
+  agent_weights: Record<AnalystName, number>;
+  conviction_threshold: number;
+  quorum: number;
+  max_position_pct: number;
+  max_daily_deploy_pct: number;
+  max_order_notional_usd: number;
+  max_spread_bps: number;
+  max_chase_pct: number;
+  max_drop_pct: number;
+  daily_loss_halt_pct: number;
+  executor_interval_min: number;
+  thesis_run_time_et: string;
+  model: {
+    analysts: string;
+    synthesizer: string;
+    executor: string;
+  };
+}
+
+// Normalized shape of GET /api/status; nulls mean the server could not report
+// the field (e.g. broker creds missing).
+export interface StatusResponse {
+  mode: Mode | null;
+  session: Session | null;
+  halt: HaltState | null;
+  equity: number | null;
+  error?: string;
+}
+
+export interface PositionsResponse {
+  positions: Position[];
+  error?: string;
+}
+export interface OrdersResponse {
+  orders: BrokerOrder[];
+  error?: string;
+}
