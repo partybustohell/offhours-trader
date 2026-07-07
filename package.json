@@ -1,0 +1,29 @@
+{
+  "name": "offhours-trader",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "pipeline": "tsx src/pipeline.ts",
+    "tick": "tsx src/executor-loop.ts",
+    "serve": "tsx src/server.ts",
+    "seed": "tsx scripts/seed-demo.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "build:frontend": "cd frontend && pnpm install && pnpm build"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.57.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0",
+    "yaml": "^2.6.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

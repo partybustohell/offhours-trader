@@ -1,0 +1,43 @@
+# Off-hours trader configuration. Every field here is user-tweakable; the
+# dashboard config editor edits everything except `mode` and
+# `live_trading_acknowledged`, which must be changed by hand in this file.
+
+mode: paper # dry-run | paper | live
+live_trading_acknowledged: false
+
+universe:
+  nominations_per_agent: 5
+  max_candidates: 15
+  min_price: 5
+  min_avg_dollar_volume: 20000000
+  exclude: [] # tickers the system must never trade
+
+sessions:
+  premarket: true
+  afterhours: true
+
+agent_weights:
+  fundamental: 1.0
+  technical: 0.8
+  macro: 0.6
+  sentiment: 1.0
+  bear: 1.2
+
+conviction_threshold: 0.65
+quorum: 3
+
+max_position_pct: 5
+max_daily_deploy_pct: 10
+max_order_notional_usd: 2000
+max_spread_bps: 50
+max_chase_pct: 1
+max_drop_pct: 3
+daily_loss_halt_pct: 3
+
+executor_interval_min: 15
+thesis_run_time_et: "17:00"
+
+model:
+  analysts: claude-sonnet-5
+  synthesizer: claude-fable-5
+  executor: claude-sonnet-5
