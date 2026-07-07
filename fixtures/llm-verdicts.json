@@ -1,0 +1,166 @@
+{
+  "fundamental": {
+    "verdicts": [
+      {
+        "ticker": "NVDA",
+        "direction": "long",
+        "conviction": 0.9,
+        "horizon": "days",
+        "evidence": ["Beat-and-raise quarter with data-center upside"],
+        "invalidation_conditions": ["NVDA closes below 95"]
+      },
+      {
+        "ticker": "AAPL",
+        "direction": "long",
+        "conviction": 0.6,
+        "horizon": "weeks",
+        "evidence": ["Services margin expansion in analyst notes"],
+        "invalidation_conditions": ["Services growth guided below 10%"]
+      },
+      {
+        "ticker": "AMD",
+        "direction": "long",
+        "conviction": 0.9,
+        "horizon": "days",
+        "evidence": ["Server share gains continuing"],
+        "invalidation_conditions": ["AMD closes below 72"]
+      },
+      {
+        "ticker": "INTC",
+        "direction": "none",
+        "conviction": 0.5,
+        "horizon": "days",
+        "evidence": ["No fundamental catalyst in the data provided"],
+        "invalidation_conditions": []
+      }
+    ]
+  },
+  "technical": {
+    "verdicts": [
+      {
+        "ticker": "NVDA",
+        "direction": "long",
+        "conviction": 0.9,
+        "horizon": "days",
+        "evidence": ["Breakout above 98 on expanding volume"],
+        "invalidation_conditions": ["NVDA breaks below 96 on volume"]
+      },
+      {
+        "ticker": "AAPL",
+        "direction": "none",
+        "conviction": 0.4,
+        "horizon": "days",
+        "evidence": ["Rangebound bars, no tradable structure"],
+        "invalidation_conditions": []
+      },
+      {
+        "ticker": "AMD",
+        "direction": "short",
+        "conviction": 0.9,
+        "horizon": "days",
+        "evidence": ["Failed breakout; close at the low of the range"],
+        "invalidation_conditions": ["AMD reclaims 80 on volume"]
+      },
+      {
+        "ticker": "COIN",
+        "direction": "short",
+        "conviction": 0.8,
+        "horizon": "days",
+        "evidence": ["Breakdown through 252 support on volume"],
+        "invalidation_conditions": ["COIN reclaims 252 on volume"]
+      },
+      {
+        "ticker": "INTC",
+        "direction": "long",
+        "conviction": 0.4,
+        "horizon": "weeks",
+        "evidence": ["Possible base forming at 30"],
+        "invalidation_conditions": ["INTC closes below 29"]
+      }
+    ]
+  },
+  "macro": {
+    "verdicts": [
+      {
+        "ticker": "NVDA",
+        "direction": "long",
+        "conviction": 0.9,
+        "horizon": "days",
+        "evidence": ["Semis leading the growth-factor rotation"],
+        "invalidation_conditions": ["NVDA closes below 95"]
+      },
+      {
+        "ticker": "AAPL",
+        "direction": "none",
+        "conviction": 0.5,
+        "horizon": "days",
+        "evidence": ["No macro edge on the name this week"],
+        "invalidation_conditions": []
+      },
+      {
+        "ticker": "AMD",
+        "direction": "none",
+        "conviction": 0,
+        "horizon": "days",
+        "evidence": ["Sector signal mixed"],
+        "invalidation_conditions": []
+      },
+      {
+        "ticker": "COIN",
+        "direction": "none",
+        "conviction": 0.3,
+        "horizon": "days",
+        "evidence": ["Crypto beta with no rate linkage tonight"],
+        "invalidation_conditions": []
+      }
+    ]
+  },
+  "sentiment": {
+    "verdicts": [
+      {
+        "ticker": "NVDA",
+        "direction": "long",
+        "conviction": 0.9,
+        "horizon": "days",
+        "evidence": ["Guidance raise corroborated by multiple outlets within the hour"],
+        "invalidation_conditions": ["guidance walked back"]
+      },
+      {
+        "ticker": "AAPL",
+        "direction": "long",
+        "conviction": 0.5,
+        "horizon": "days",
+        "evidence": ["Mildly positive services chatter"],
+        "invalidation_conditions": ["negative follow-up coverage"]
+      }
+    ]
+  },
+  "bear": {
+    "verdicts": [
+      {
+        "ticker": "NVDA",
+        "direction": "none",
+        "conviction": 0.5,
+        "horizon": "days",
+        "evidence": ["Crowded, but the catalyst is real and liquidity is deep"],
+        "invalidation_conditions": []
+      },
+      {
+        "ticker": "AAPL",
+        "direction": "none",
+        "conviction": 0.5,
+        "horizon": "days",
+        "evidence": ["No edge either way"],
+        "invalidation_conditions": []
+      },
+      {
+        "ticker": "COIN",
+        "direction": "short",
+        "conviction": 0.9,
+        "horizon": "days",
+        "evidence": ["Enforcement overhang plus a thin extended-hours book invites continuation"],
+        "invalidation_conditions": ["Enforcement action dismissed or settled"]
+      }
+    ]
+  }
+}

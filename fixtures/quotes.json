@@ -1,0 +1,29 @@
+{
+  "pass": {
+    "ticker": "NVDA",
+    "bid": 100.0,
+    "ask": 100.1,
+    "bidSize": 5,
+    "askSize": 4,
+    "last": 100.05,
+    "asOf": "2026-07-07T21:15:00Z"
+  },
+  "wideSpread": {
+    "ticker": "COIN",
+    "bid": 247.0,
+    "ask": 250.0,
+    "bidSize": 3,
+    "askSize": 2,
+    "last": 248.5,
+    "asOf": "2026-07-07T21:15:00Z"
+  },
+  "outsideBand": {
+    "ticker": "COIN",
+    "bid": 245.9,
+    "ask": 246.1,
+    "bidSize": 3,
+    "askSize": 2,
+    "last": 246.0,
+    "asOf": "2026-07-07T21:15:00Z"
+  }
+}

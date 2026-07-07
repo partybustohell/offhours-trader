@@ -4,7 +4,12 @@ import { statePath, writeJsonAtomic, readJsonIfExists } from './paths.js';
 const DEFAULT_STATE: HaltState = { halted: false, reason: '', at: '' };
 
 export function readHaltState(): HaltState {
-  const raw = readJsonIfExists<Partial<HaltState>>(statePath());
+  let raw: Partial<HaltState> | null;
+  try {
+    raw = readJsonIfExists<Partial<HaltState>>(statePath());
+  } catch {
+    return { ...DEFAULT_STATE };
+  }
   if (!raw || typeof raw !== 'object' || typeof raw.halted !== 'boolean') {
     return { ...DEFAULT_STATE };
   }

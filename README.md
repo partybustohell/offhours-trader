@@ -33,6 +33,8 @@ pnpm tick       # one executor tick (no-op outside enabled extended-hours sessio
 pnpm serve      # dashboard + API on http://localhost:4310
 pnpm test       # unit + replay integration tests
 pnpm seed       # write demo data into out/ so the dashboard renders without keys
+                # (the seeded thesis is pre-expired so the executor can never
+                #  act on it, and seeding never touches the halt state)
 ```
 
 The system is file-driven: the pipeline writes `out/candidates-*.json`,

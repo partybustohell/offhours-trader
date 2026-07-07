@@ -1,0 +1,81 @@
+{
+  "movers": {
+    "gainers": [
+      { "symbol": "NVDA", "percent_change": 8.4, "price": 100.0 },
+      { "symbol": "AMD", "percent_change": 5.2, "price": 80.0 },
+      { "symbol": "TSLA", "percent_change": 6.1, "price": 300.0 },
+      { "symbol": "PENY", "percent_change": 45.0, "price": 3.5 }
+    ],
+    "losers": [
+      { "symbol": "COIN", "percent_change": -7.8, "price": 250.0 },
+      { "symbol": "INTC", "percent_change": -3.2, "price": 30.0 },
+      { "symbol": "GME", "percent_change": -4.0, "price": 22.0 }
+    ]
+  },
+  "mostActives": [
+    { "symbol": "NVDA", "volume": 55000000, "trade_count": 410000 },
+    { "symbol": "TSLA", "volume": 41000000, "trade_count": 380000 },
+    { "symbol": "AAPL", "volume": 38000000, "trade_count": 290000 },
+    { "symbol": "PENY", "volume": 33000000, "trade_count": 21000 },
+    { "symbol": "GME", "volume": 12000000, "trade_count": 95000 },
+    { "symbol": "XOM", "volume": 9000000, "trade_count": 70000 }
+  ],
+  "news": [
+    {
+      "headline": "NVDA raises full-year guidance after data-center beat",
+      "summary": "Nvidia reported quarterly revenue above consensus and raised full-year guidance, citing data-center demand.",
+      "symbols": ["NVDA"],
+      "created_at": "2026-07-07T20:15:00Z",
+      "source": "reuters"
+    },
+    {
+      "headline": "Nvidia guidance raise corroborated across outlets",
+      "summary": "Multiple wire services carry the same beat-and-raise numbers within the hour.",
+      "symbols": ["NVDA"],
+      "created_at": "2026-07-07T20:40:00Z",
+      "source": "bloomberg"
+    },
+    {
+      "headline": "Apple services margin commentary draws analyst notes",
+      "summary": "Sell-side notes flag services margin expansion ahead of the quarter.",
+      "symbols": ["AAPL"],
+      "created_at": "2026-07-07T19:05:00Z",
+      "source": "cnbc"
+    },
+    {
+      "headline": "Coinbase drops after enforcement action headline",
+      "summary": "COIN fell 7.8% after a regulator announced an enforcement action tied to staking products.",
+      "symbols": ["COIN"],
+      "created_at": "2026-07-07T20:05:00Z",
+      "source": "reuters"
+    },
+    {
+      "headline": "Tesla delivery numbers due ahead of the print",
+      "summary": "Quarterly delivery figures expected before Thursday's report.",
+      "symbols": ["TSLA"],
+      "created_at": "2026-07-07T18:30:00Z",
+      "source": "reuters"
+    },
+    {
+      "headline": "Energy names bid on inflation print chatter",
+      "summary": "Crude strength and rate commentary lift integrated majors.",
+      "symbols": ["XOM"],
+      "created_at": "2026-07-07T17:45:00Z",
+      "source": "wsj"
+    },
+    {
+      "headline": "GameStop headline flow accelerates after CEO interview",
+      "summary": "Retail chatter picks up following an evening interview.",
+      "symbols": ["GME"],
+      "created_at": "2026-07-07T20:20:00Z",
+      "source": "benzinga"
+    },
+    {
+      "headline": "Rumor: GHOST Corp draws acquisition interest",
+      "summary": "A single blog post claims a strategic buyer is circling GHOST Corp.",
+      "symbols": ["GHOST"],
+      "created_at": "2026-07-07T20:25:00Z",
+      "source": "stockblog"
+    }
+  ]
+}

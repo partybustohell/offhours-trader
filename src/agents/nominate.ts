@@ -31,6 +31,8 @@ export interface Scans {
   movers: MoversScan;
   mostActives: MostActiveItem[];
   news: NewsItem[];
+  /** Daily bars for mover symbols; consumed by the technical analyst. */
+  barsBySymbol?: Record<string, unknown>;
 }
 
 export interface NominationRound {
@@ -43,7 +45,7 @@ function payloadFor(analyst: AnalystName, scans: Scans): Record<string, unknown>
     case 'fundamental':
       return { news: scans.news, mostActives: scans.mostActives };
     case 'technical':
-      return { movers: scans.movers, mostActives: scans.mostActives };
+      return { movers: scans.movers, mostActives: scans.mostActives, bars: scans.barsBySymbol ?? {} };
     case 'macro':
       return { movers: scans.movers, news: scans.news };
     case 'sentiment':
@@ -79,6 +81,11 @@ function nominationSchema(maxItems: number): Record<string, unknown> {
   };
 }
 
+// Plausible US equity symbol; model output that is not a symbol (prose,
+// hallucinated strings) is dropped at this boundary, before it can reach a
+// market-data request.
+const TICKER_RE = /^[A-Z][A-Z0-9.\-]{0,9}$/;
+
 function sanitize(raw: unknown, max: number): Nomination[] {
   const items = (raw as { nominations?: unknown })?.nominations;
   if (!Array.isArray(items)) return [];
@@ -86,9 +93,11 @@ function sanitize(raw: unknown, max: number): Nomination[] {
   for (const item of items) {
     const ticker = (item as { ticker?: unknown })?.ticker;
     const reason = (item as { reason?: unknown })?.reason;
-    if (typeof ticker !== 'string' || ticker.trim() === '') continue;
+    if (typeof ticker !== 'string') continue;
+    const t = ticker.trim().toUpperCase();
+    if (!TICKER_RE.test(t)) continue;
     if (typeof reason !== 'string') continue;
-    out.push({ ticker: ticker.trim().toUpperCase(), reason: reason.trim() });
+    out.push({ ticker: t, reason: reason.trim() });
     if (out.length >= max) break;
   }
   return out;

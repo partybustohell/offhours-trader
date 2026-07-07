@@ -67,13 +67,30 @@ export function loadConfig(configPath: string = CONFIG_PATH): Config {
 }
 
 /**
- * Validate and persist a config update. `mode` and `live_trading_acknowledged`
- * are immutable through this path: whatever the caller sends, the on-disk
- * values are kept. Switching to live requires editing config.yaml by hand.
+ * Validate and persist a config update, treated as a PATCH: fields omitted
+ * from the body keep their on-disk values instead of resetting to schema
+ * defaults (a partial body must never silently loosen a risk cap).
+ * `mode` and `live_trading_acknowledged` are immutable through this path:
+ * whatever the caller sends, the on-disk values are kept. Switching to live
+ * requires editing config.yaml by hand.
  */
 export function saveConfig(next: unknown, configPath: string = CONFIG_PATH): Config {
   const current = loadConfig(configPath);
-  const parsed = ConfigSchema.safeParse(next);
+  if (next === null || typeof next !== 'object' || Array.isArray(next)) {
+    throw new Error('invalid config: body must be an object');
+  }
+  const patch = next as Record<string, unknown>;
+  const candidate: Record<string, unknown> = { ...current, ...patch };
+  // one level of nesting: merge known object fields key-by-key
+  for (const key of ['universe', 'sessions', 'agent_weights', 'model'] as const) {
+    if (patch[key] !== undefined) {
+      if (patch[key] === null || typeof patch[key] !== 'object' || Array.isArray(patch[key])) {
+        throw new Error(`invalid config: ${key} must be an object`);
+      }
+      candidate[key] = { ...current[key], ...(patch[key] as Record<string, unknown>) };
+    }
+  }
+  const parsed = ConfigSchema.safeParse(candidate);
   if (!parsed.success) {
     const issues = parsed.error.issues
       .map((i) => `${i.path.join('.')}: ${i.message}`)

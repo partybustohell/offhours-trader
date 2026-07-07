@@ -77,6 +77,7 @@ describe('AlpacaBroker.placeLimitOrder', () => {
     expect(headers['APCA-API-KEY-ID']).toBe('paper-key');
     expect(headers['APCA-API-SECRET-KEY']).toBe('paper-secret');
     const body = JSON.parse(String(calls[0]!.init?.body));
+    expect(body.client_order_id).toMatch(/^entry-/);
     expect(body).toEqual({
       symbol: 'AAPL',
       qty: '10',
@@ -85,6 +86,7 @@ describe('AlpacaBroker.placeLimitOrder', () => {
       time_in_force: 'day',
       limit_price: '123.45',
       extended_hours: true,
+      client_order_id: body.client_order_id,
     });
     expect(placed).toEqual({
       id: 'ord-1',
@@ -94,7 +96,54 @@ describe('AlpacaBroker.placeLimitOrder', () => {
       limitPrice: 123.45,
       status: 'accepted',
       submittedAt: '2026-07-07T21:00:00Z',
+      clientOrderId: undefined,
+      filledQty: 0,
     });
+  });
+
+  it('serializes sub-penny limit prices to whole cents', async () => {
+    const { fetchFn, calls } = makeFetch([{ status: 200, json: alpacaOrderJson }]);
+    const broker = new AlpacaBroker(paperCfg, paperEnv, fetchFn, noSleep);
+    await broker.placeLimitOrder({ ...proposed, limitPrice: 123.4567 });
+    const body = JSON.parse(String(calls[0]!.init?.body));
+    expect(body.limit_price).toBe('123.46');
+  });
+
+  it('keeps one client_order_id across retries so a committed order cannot double-place', async () => {
+    const { fetchFn, calls } = makeFetch([
+      { status: 500, json: {} },
+      { status: 500, json: {} },
+      { status: 200, json: alpacaOrderJson },
+    ]);
+    const broker = new AlpacaBroker(paperCfg, paperEnv, fetchFn, noSleep);
+    await broker.placeLimitOrder(proposed);
+    const ids = calls.map((c) => JSON.parse(String(c.init?.body)).client_order_id);
+    expect(ids).toHaveLength(3);
+    expect(new Set(ids).size).toBe(1);
+  });
+
+  it('recovers the committed order when the retry is rejected as a duplicate client_order_id', async () => {
+    const committed = { ...alpacaOrderJson, id: 'ord-original', client_order_id: 'entry-x' };
+    let post = 0;
+    const calls: RecordedCall[] = [];
+    const fetchFn = (async (input: unknown, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      const url = String(input);
+      if (init?.method === 'POST') {
+        post++;
+        // first POST commits server-side but the client sees a 500; the
+        // retried POST is rejected as a duplicate
+        if (post === 1) return new Response('{}', { status: 500 });
+        return new Response(JSON.stringify({ message: 'client_order_id must be unique' }), {
+          status: 422,
+        });
+      }
+      expect(url).toContain('/v2/orders:by_client_order_id?client_order_id=');
+      return new Response(JSON.stringify(committed), { status: 200 });
+    }) as typeof globalThis.fetch;
+    const broker = new AlpacaBroker(paperCfg, paperEnv, fetchFn, noSleep);
+    const placed = await broker.placeLimitOrder(proposed);
+    expect(placed.id).toBe('ord-original');
   });
 
   it('dry-run makes zero fetch calls and returns a synthetic dry_run order', async () => {

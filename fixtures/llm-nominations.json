@@ -1,0 +1,36 @@
+{
+  "fundamental": {
+    "nominations": [
+      { "ticker": "NVDA", "reason": "Post-close beat-and-raise in the news feed with elevated most-actives volume" },
+      { "ticker": "AAPL", "reason": "Services margin commentary in the news; most-actives volume elevated" },
+      { "ticker": "TSLA", "reason": "Delivery numbers due in the news feed ahead of the print" }
+    ]
+  },
+  "technical": {
+    "nominations": [
+      { "ticker": "NVDA", "reason": "Top gainer +8.4% with volume confirmation" },
+      { "ticker": "AMD", "reason": "Gainer +5.2% breaking out of a two-week base" },
+      { "ticker": "PENY", "reason": "Gainer +45% on massive volume" }
+    ]
+  },
+  "macro": {
+    "nominations": [
+      { "ticker": "AAPL", "reason": "Mega-cap tech leading a broad growth-factor rotation in the movers list" },
+      { "ticker": "XOM", "reason": "Energy bid on the inflation chatter in the news feed" }
+    ]
+  },
+  "sentiment": {
+    "nominations": [
+      { "ticker": "nvda", "reason": "Multiple outlets corroborating the guidance raise within the hour" },
+      { "ticker": "GME", "reason": "Accelerating headline flow after the CEO interview" },
+      { "ticker": "GHOST", "reason": "Single-source acquisition rumor worth a skeptical look" }
+    ]
+  },
+  "bear": {
+    "nominations": [
+      { "ticker": "NVDA", "reason": "Crowded gainer; panel should check whether the move already priced the news" },
+      { "ticker": "COIN", "reason": "Top loser -7.8% on an enforcement headline; downside continuation candidate" },
+      { "ticker": "INTC", "reason": "Loser drifting on no news; check for a value-trap bounce narrative" }
+    ]
+  }
+}

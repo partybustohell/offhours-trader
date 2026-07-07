@@ -55,8 +55,17 @@ export async function runPipeline(deps: PipelineDeps = {}): Promise<Thesis> {
     md.getMostActives(),
     md.getNews(),
   ]);
+  const moverSymbols = [
+    ...new Set([...movers.gainers, ...movers.losers].map((m) => m.symbol.toUpperCase())),
+  ];
+  const moverBars =
+    moverSymbols.length > 0 ? Object.fromEntries(await md.getDailyBars(moverSymbols)) : {};
 
-  const round1 = await runNominations(cfg, { movers, mostActives, news }, deps.llm);
+  const round1 = await runNominations(
+    cfg,
+    { movers, mostActives, news, barsBySymbol: moverBars },
+    deps.llm,
+  );
   for (const an of round1.nominations) {
     appendAudit({ kind: 'nomination', data: an });
   }

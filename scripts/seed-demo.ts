@@ -11,8 +11,8 @@ import {
   writeJsonAtomic,
 } from '../src/paths.js';
 import { nowET } from '../src/clock.js';
-import { thesisExpiry } from '../src/synthesis.js';
-import { clearHalt } from '../src/state.js';
+// state.js deliberately not imported: seeding must never alter halt state
+// import { clearHalt } from '../src/state.js';
 
 const today = nowET().ymd;
 const now = new Date();
@@ -211,10 +211,13 @@ const verdicts: VerdictFile = {
 };
 
 // NVDA long band: 176.42 * [0.97, 1.01]; TSLA short band: 242.87 * [0.99, 1.03]
+// expiresAt is deliberately in the PAST: this thesis is fabricated demo data
+// and must never be actionable — loadUnexpiredThesis rejects expired theses,
+// so a scheduled executor tick cannot trade on it.
 const thesis: Thesis = {
   date: today,
   generatedAt: now.toISOString(),
-  expiresAt: thesisExpiry(today),
+  expiresAt: new Date(now.getTime() - 60_000).toISOString(),
   entries: [
     {
       ticker: 'NVDA',
@@ -346,11 +349,12 @@ const lines = auditEvents.map((event, i) => {
 });
 fs.writeFileSync(auditPath(today), `${lines.join('\n')}\n`);
 
-clearHalt(now);
+// Never touch out/state.json: a tripped kill switch or manual halt must
+// survive demo seeding ("until manually reset").
 
 console.log(`seeded demo data for ${today}:`);
 console.log(`  ${candidatesPath(today)}`);
 console.log(`  ${verdictsPath(today)}`);
 console.log(`  ${thesisPath(today)}`);
 console.log(`  ${auditPath(today)} (${auditEvents.length} events)`);
-console.log('  state.json (not halted)');
+console.log('  (thesis is pre-expired; the executor will not act on demo data)');

@@ -133,6 +133,12 @@ describe('riskCheck', () => {
       expect(d.allowed).toBe(false);
       expect(d.reasons).toContain('excluded ticker');
     });
+
+    it('does not apply to exits: closing an excluded-ticker position is allowed', () => {
+      const ctx = makeCtx({ config: ConfigSchema.parse({ universe: { exclude: ['NVDA'] } }) });
+      const d = riskCheck(makeOrder({ ticker: 'NVDA', side: 'sell', intent: 'exit' }), ctx);
+      expect(d).toEqual({ allowed: true, reasons: [] });
+    });
   });
 
   describe('rule 6: max order notional (entries only)', () => {

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { Config } from '../config.js';
 import { assertModeRunnable } from '../config.js';
 import type {
@@ -136,6 +137,8 @@ interface AlpacaOrder {
   limit_price?: string | null;
   status: string;
   submitted_at: string;
+  client_order_id?: string | null;
+  filled_qty?: string | null;
 }
 
 function mapPosition(p: AlpacaPosition): Position {
@@ -158,6 +161,8 @@ function mapOrder(o: AlpacaOrder): BrokerOrder {
     limitPrice: o.limit_price == null ? 0 : Number(o.limit_price),
     status: o.status,
     submittedAt: o.submitted_at,
+    clientOrderId: o.client_order_id ?? undefined,
+    filledQty: o.filled_qty == null ? 0 : Number(o.filled_qty),
   };
 }
 
@@ -233,6 +238,10 @@ export class AlpacaBroker implements BrokerClient {
   }
 
   async placeLimitOrder(o: ProposedOrder): Promise<BrokerOrder> {
+    // Generated once per call, OUTSIDE the retry loop: if a POST commits at
+    // Alpaca but the response is lost, the retry is rejected as a duplicate
+    // client_order_id instead of placing a second order.
+    const clientOrderId = `${o.intent}-${randomUUID()}`;
     if (this.mode === 'dry-run') {
       const ts = new Date().toISOString();
       return {
@@ -243,6 +252,8 @@ export class AlpacaBroker implements BrokerClient {
         limitPrice: o.limitPrice,
         status: 'dry_run',
         submittedAt: ts,
+        clientOrderId,
+        filledQty: 0,
       };
     }
     const body = {
@@ -251,14 +262,29 @@ export class AlpacaBroker implements BrokerClient {
       side: o.side,
       type: 'limit',
       time_in_force: 'day',
-      limit_price: String(o.limitPrice),
+      // Alpaca rejects sub-penny limit prices on stocks >= $1 with a 422.
+      limit_price: o.limitPrice.toFixed(2),
       extended_hours: true,
+      client_order_id: clientOrderId,
     };
-    const raw = await this.request('/v2/orders', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-    return mapOrder(raw as AlpacaOrder);
+    try {
+      const raw = await this.request('/v2/orders', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      return mapOrder(raw as AlpacaOrder);
+    } catch (err) {
+      // A duplicate client_order_id means an earlier attempt actually
+      // committed; recover the real order so the audit log reflects it.
+      const message = err instanceof Error ? err.message : String(err);
+      if (/client.?order.?id/i.test(message)) {
+        const raw = await this.request(
+          `/v2/orders:by_client_order_id?client_order_id=${encodeURIComponent(clientOrderId)}`,
+        );
+        return mapOrder(raw as AlpacaOrder);
+      }
+      throw err;
+    }
   }
 }

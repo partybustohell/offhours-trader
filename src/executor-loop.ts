@@ -1,11 +1,13 @@
 import 'dotenv/config';
+import fs from 'node:fs';
+import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { ProposedOrder, QuoteSnapshot, Thesis } from './types.js';
 import type { Config } from './config.js';
 import { loadConfig } from './config.js';
 import { currentSession, nowET, sessionEnabled } from './clock.js';
 import { appendAudit } from './audit.js';
-import { readJsonIfExists, thesisPath } from './paths.js';
+import { ensureOut, OUT_DIR, readJsonIfExists, thesisPath } from './paths.js';
 import { readHaltState, writeHalt } from './state.js';
 import { riskCheck, type RiskContext } from './risk.js';
 import type { BrokerClient } from './broker/client.js';
@@ -24,21 +26,68 @@ export interface TickDeps {
 
 const DAY_MS = 86_400_000;
 
-function loadUnexpiredThesis(ymd: string, now: Date): Thesis | null {
-  const raw = readJsonIfExists<Thesis>(thesisPath(ymd));
+/**
+ * A corrupt or shape-invalid thesis file ABORTS the tick (default posture:
+ * do nothing) rather than silently falling back to an older thesis. Only a
+ * genuinely absent file returns null.
+ */
+function loadThesisFile(ymd: string): Thesis | null {
+  let raw: Thesis | null;
+  try {
+    raw = readJsonIfExists<Thesis>(thesisPath(ymd));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    appendAudit({ kind: 'error', data: { stage: 'thesis_load', file: thesisPath(ymd), message } });
+    throw new Error(`malformed thesis file ${thesisPath(ymd)}: ${message}`);
+  }
   if (!raw) return null;
   if (
     !Array.isArray(raw.entries) ||
     typeof raw.expiresAt !== 'string' ||
     typeof raw.generatedAt !== 'string'
   ) {
-    // malformed thesis file: refuse to trade on it, log, keep looking
     appendAudit({ kind: 'error', data: { stage: 'thesis_load', file: thesisPath(ymd) } });
-    return null;
+    throw new Error(`malformed thesis file ${thesisPath(ymd)}: invalid shape`);
   }
+  return raw;
+}
+
+function loadUnexpiredThesis(ymd: string, now: Date): Thesis | null {
+  const raw = loadThesisFile(ymd);
+  if (!raw) return null;
   const expires = new Date(raw.expiresAt).getTime();
   if (!Number.isFinite(expires) || expires <= now.getTime()) return null;
   return raw;
+}
+
+/**
+ * Deployment consumed today = entry orders only, identified by the
+ * client_order_id tag set at placement. Canceled entries count at their
+ * filled portion. Side is deliberately NOT the discriminator: short entries
+ * are sells and must consume the budget; buy-side covers must not.
+ */
+export function seedDeployedTodayUsd(todayOrders: { clientOrderId?: string; status: string; qty: number; filledQty?: number; limitPrice: number }[]): number {
+  return todayOrders
+    .filter((o) => o.clientOrderId?.startsWith('entry-'))
+    .reduce(
+      (sum, o) => sum + (o.status === 'canceled' ? (o.filledQty ?? 0) : o.qty) * o.limitPrice,
+      0,
+    );
+}
+
+/**
+ * Clamp an entry limit to the thesis band and round to whole cents toward
+ * the passive side (floor for buys, ceil for sells) so the price stays
+ * inside the band and Alpaca never sees sub-penny precision.
+ */
+export function entryLimitPrice(
+  direction: 'long' | 'short',
+  quote: { bid: number; ask: number },
+  band: { low: number; high: number },
+): number {
+  return direction === 'long'
+    ? Math.floor(Math.min(quote.ask, band.high) * 100) / 100
+    : Math.ceil(Math.max(quote.bid, band.low) * 100) / 100;
 }
 
 export async function runTick(deps: TickDeps = {}): Promise<void> {
@@ -81,11 +130,16 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
     return;
   }
 
-  let deployedTodayUsd = todayOrders
-    .filter((o) => o.side === 'buy' && o.status !== 'canceled')
-    .reduce((sum, o) => sum + o.qty * o.limitPrice, 0);
+  let deployedTodayUsd = seedDeployedTodayUsd(todayOrders);
 
-  const tickers = thesis.entries.map((e) => e.ticker);
+  // Quotes for thesis tickers plus every open position, so invalidation
+  // monitoring covers positions whose thesis entry has since expired.
+  const tickers = [
+    ...new Set([
+      ...thesis.entries.map((e) => e.ticker.toUpperCase()),
+      ...account.positions.map((p) => p.ticker.toUpperCase()),
+    ]),
+  ];
   const [quotes, allNews] = await Promise.all([
     tickers.length > 0 ? md.getLatestQuotes(tickers) : Promise.resolve([] as QuoteSnapshot[]),
     tickers.length > 0 ? md.getNews(50, tickers) : Promise.resolve([] as NewsItem[]),
@@ -123,11 +177,30 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
     appendAudit({ kind: 'tick', data: { stage: 'skip', ticker, reason } });
   };
 
+  // Exit entries: active thesis first, then the most recent thesis file
+  // (expiry ignored) so positions opened on an expired thesis stay monitored.
+  const exitEntryFor = (ticker: string) => {
+    const active = thesis.entries.find((e) => e.ticker.toUpperCase() === ticker);
+    if (active) return active;
+    for (const ymd of [todayYmd, yesterdayYmd]) {
+      const past = loadThesisFile(ymd);
+      const entry = past?.entries.find((e) => e.ticker.toUpperCase() === ticker);
+      if (entry) return entry;
+    }
+    return undefined;
+  };
+
   // Exits first: closing risk takes precedence over opening it.
-  for (const entry of thesis.entries) {
-    const ticker = entry.ticker.toUpperCase();
-    const position = account.positions.find((p) => p.ticker.toUpperCase() === ticker);
-    if (!position) continue;
+  for (const position of account.positions) {
+    const ticker = position.ticker.toUpperCase();
+    const entry = exitEntryFor(ticker);
+    if (!entry) {
+      appendAudit({
+        kind: 'tick',
+        data: { stage: 'orphan_position', ticker, note: 'no thesis entry found; not monitored' },
+      });
+      continue;
+    }
     const quote = quoteByTicker.get(ticker);
     if (!quote) {
       skip(ticker, 'no quote for exit check');
@@ -145,7 +218,10 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
       ticker: entry.ticker,
       side: isLong ? 'sell' : 'buy',
       qty: Math.abs(position.qty),
-      limitPrice: isLong ? quote.bid : quote.ask,
+      // marketable exit limit, cent-rounded toward the passive side
+      limitPrice: isLong
+        ? Math.floor(quote.bid * 100) / 100
+        : Math.ceil(quote.ask * 100) / 100,
       intent: 'exit',
       reason: decision.reasons.join('; ') || 'invalidation triggered',
     };
@@ -196,10 +272,7 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
       skip(ticker, `judge declined: ${decision.reasons.join('; ') || 'no reason given'}`);
       continue;
     }
-    const limitPrice =
-      entry.direction === 'long'
-        ? Math.min(quote.ask, entry.limitBand.high)
-        : Math.max(quote.bid, entry.limitBand.low);
+    const limitPrice = entryLimitPrice(entry.direction, quote, entry.limitBand);
     const qty = Math.floor(entry.targetNotionalUsd / limitPrice);
     if (qty < 1) {
       skip(ticker, 'target notional below one share');
@@ -218,8 +291,8 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
     if (risk.allowed) {
       const placed = await broker.placeLimitOrder(order);
       openOrders.push(placed);
-      // keep the in-tick deploy total consistent with getTodayOrders()
-      if (order.side === 'buy') deployedTodayUsd += qty * limitPrice;
+      // every entry consumes the daily budget, shorts included
+      deployedTodayUsd += qty * limitPrice;
       appendAudit({ kind: 'order_placed', data: placed });
       summary.entriesPlaced++;
     } else {
@@ -232,7 +305,54 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
   appendAudit({ kind: 'tick', data: summary });
 }
 
+const LOCK_STALE_MS = 10 * 60 * 1000;
+
+/**
+ * Cross-process mutual exclusion: a cron tick and an API-triggered tick must
+ * never run concurrently (duplicate orders, daily-deploy races). Returns a
+ * release function, or null when another live executor holds the lock.
+ */
+export function acquireTickLock(lockPath: string = path.join(OUT_DIR, 'executor.lock')): (() => void) | null {
+  ensureOut();
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const fd = fs.openSync(lockPath, 'wx');
+      fs.writeSync(fd, JSON.stringify({ pid: process.pid, at: new Date().toISOString() }));
+      fs.closeSync(fd);
+      return () => fs.rmSync(lockPath, { force: true });
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+      let stale = false;
+      try {
+        const holder = JSON.parse(fs.readFileSync(lockPath, 'utf8')) as { pid?: number; at?: string };
+        const age = Date.now() - new Date(holder.at ?? 0).getTime();
+        if (age > LOCK_STALE_MS) stale = true;
+        else if (holder.pid) {
+          try {
+            process.kill(holder.pid, 0);
+          } catch {
+            stale = true; // holder process is gone
+          }
+        }
+      } catch {
+        stale = true; // unreadable lock file
+      }
+      if (!stale) return null;
+      fs.rmSync(lockPath, { force: true });
+    }
+  }
+  return null;
+}
+
 export async function main(): Promise<void> {
+  const release = acquireTickLock();
+  if (!release) {
+    appendAudit({
+      kind: 'tick',
+      data: { stage: 'lock_gate', action: 'skip', reason: 'another executor tick is running' },
+    });
+    return;
+  }
   try {
     await runTick();
   } catch (err) {
@@ -243,7 +363,9 @@ export async function main(): Promise<void> {
     } catch {
       // audit failure must not mask the original error
     }
-    process.exit(1);
+    process.exitCode = 1;
+  } finally {
+    release();
   }
 }
 

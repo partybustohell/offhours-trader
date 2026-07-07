@@ -101,6 +101,9 @@ export interface BrokerOrder {
   limitPrice: number;
   status: string;
   submittedAt: string;
+  /** Our idempotency tag; prefixed 'entry-' or 'exit-' at placement. */
+  clientOrderId?: string;
+  filledQty?: number;
 }
 
 export interface HaltState {

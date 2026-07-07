@@ -46,7 +46,8 @@ export function riskCheck(order: ProposedOrder, ctx: RiskContext): RiskDecision 
     reasons.push('invalid qty');
   }
 
-  if (cfg.universe.exclude.some((t) => t.toUpperCase() === ticker)) {
+  // Entry-only: the exclude list must never block closing a position.
+  if (isEntry && cfg.universe.exclude.some((t) => t.toUpperCase() === ticker)) {
     reasons.push('excluded ticker');
   }
 

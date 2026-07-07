@@ -117,6 +117,34 @@ describe('saveConfig', () => {
     expect(() => saveConfig({ quorum: 99 }, configPath)).toThrowError(/invalid config/);
     expect(loadConfig(configPath).quorum).toBe(2);
   });
+
+  it('treats the body as a patch: omitted risk caps keep on-disk values, not defaults', () => {
+    fs.writeFileSync(
+      configPath,
+      stringifyYaml({ max_order_notional_usd: 500, max_daily_deploy_pct: 2 }),
+    );
+    const saved = saveConfig({ quorum: 4 }, configPath);
+    expect(saved.quorum).toBe(4);
+    expect(saved.max_order_notional_usd).toBe(500); // NOT reset to default 2000
+    expect(saved.max_daily_deploy_pct).toBe(2); // NOT reset to default 10
+  });
+
+  it('merges nested objects key-by-key instead of replacing them', () => {
+    fs.writeFileSync(
+      configPath,
+      stringifyYaml({ universe: { min_price: 12, exclude: ['GME'] } }),
+    );
+    const saved = saveConfig({ universe: { max_candidates: 5 } }, configPath);
+    expect(saved.universe.max_candidates).toBe(5);
+    expect(saved.universe.min_price).toBe(12);
+    expect(saved.universe.exclude).toEqual(['GME']);
+  });
+
+  it('rejects a non-object body', () => {
+    fs.writeFileSync(configPath, stringifyYaml({ quorum: 2 }));
+    expect(() => saveConfig('mode: live', configPath)).toThrowError(/must be an object/);
+    expect(() => saveConfig(null, configPath)).toThrowError(/must be an object/);
+  });
 });
 
 describe('assertModeRunnable', () => {
