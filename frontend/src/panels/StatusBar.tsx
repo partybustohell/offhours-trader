@@ -1,5 +1,5 @@
 import type { Session, StatusResponse } from '../types';
-import { fmtUsd } from '../api';
+import { fmtUsd, isMissingKeysError } from '../api';
 
 const SESSION_LABEL: Record<Session, string> = {
   premarket: 'Pre-market',
@@ -42,7 +42,9 @@ export default function StatusBar({ status, lastUpdated, offline }: Props) {
         <span className="status-label">equity</span>
         {fmtUsd(status?.equity)}
       </span>
-      {status?.error ? <span className="status-error">{status.error}</span> : null}
+      {status?.error && !isMissingKeysError(status.error) ? (
+        <span className="status-error">{status.error}</span>
+      ) : null}
       {offline ? <span className="status-error">server unreachable</span> : null}
       {lastUpdated ? (
         <span className="status-updated">

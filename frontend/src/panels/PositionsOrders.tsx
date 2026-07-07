@@ -1,5 +1,5 @@
 import type { AuditEvent, BrokerOrder, Position } from '../types';
-import { fmtClock, fmtUsd } from '../api';
+import { fmtClock, fmtUsd, isMissingKeysError } from '../api';
 
 interface Props {
   positions: Position[];
@@ -61,7 +61,9 @@ export default function PositionsOrders({
       <h2>Positions &amp; orders</h2>
 
       <h3>Positions</h3>
-      {positionsError ? <p className="inline-error">{positionsError}</p> : null}
+      {positionsError && !isMissingKeysError(positionsError) ? (
+        <p className="inline-error">{positionsError}</p>
+      ) : null}
       {positions.length === 0 ? (
         <p className="empty">No open positions.</p>
       ) : (
@@ -100,7 +102,9 @@ export default function PositionsOrders({
       )}
 
       <h3>Orders</h3>
-      {ordersError ? <p className="inline-error">{ordersError}</p> : null}
+      {ordersError && !isMissingKeysError(ordersError) ? (
+        <p className="inline-error">{ordersError}</p>
+      ) : null}
       {orders.length === 0 ? (
         <p className="empty">No orders today.</p>
       ) : (

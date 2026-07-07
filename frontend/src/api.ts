@@ -122,6 +122,14 @@ export async function fetchOrders(): Promise<OrdersResponse> {
   return { orders: [] };
 }
 
+/**
+ * Broker credentials being absent is an expected local state, not an alert:
+ * the setup instructions live in the README, so panels stay quiet about it.
+ */
+export function isMissingKeysError(message: string): boolean {
+  return /requires ALPACA_\w+ and ALPACA_\w+ in \.env/.test(message);
+}
+
 export async function fetchAudit(limit = 100): Promise<AuditEvent[]> {
   const raw = await getJson(`/api/audit?limit=${limit}`);
   const arr = Array.isArray(raw)
