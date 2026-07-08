@@ -3,3 +3,5 @@ out/
 node_modules/
 frontend/node_modules/
 frontend/dist/
+backtest-data/
+backtest-out/
