@@ -256,24 +256,28 @@ export async function fetchMinuteDay(
 // ---------- quotes/trades windows (lazy, IEX for production parity) ----------
 
 const stampOf = (iso: string) => iso.replace(/[-:]/g, '').slice(0, 13);
-export const quotesPath = (symbol: string, tickIso: string) =>
-  path.join(DATA_DIR, 'quotes', symbol, `${stampOf(tickIso)}.json`);
-export const tradesPath = (symbol: string, tickIso: string) =>
-  path.join(DATA_DIR, 'trades', symbol, `${stampOf(tickIso)}.json`);
+export type QuoteFeed = 'iex' | 'sip';
+// iex = production parity (what the live executor would see, incl. its
+// extended-hours blindness); sip = consolidated-tape realism mode.
+export const quotesPath = (symbol: string, tickIso: string, feed: QuoteFeed = 'iex') =>
+  path.join(DATA_DIR, feed === 'iex' ? 'quotes' : 'quotes-sip', symbol, `${stampOf(tickIso)}.json`);
+export const tradesPath = (symbol: string, tickIso: string, feed: QuoteFeed = 'iex') =>
+  path.join(DATA_DIR, feed === 'iex' ? 'trades' : 'trades-sip', symbol, `${stampOf(tickIso)}.json`);
 
 export async function fetchQuotesWindow(
   symbol: string,
   tickIso: string,
   c: FetchCtx = {},
+  feed: QuoteFeed = 'iex',
 ): Promise<StoredQuote[]> {
-  const file = quotesPath(symbol, tickIso);
+  const file = quotesPath(symbol, tickIso, feed);
   if (fresh(file)) return readJson<StoredQuote[]>(file)!;
   const ctx = ctxOf(c);
   const end = new Date(tickIso);
   const start = new Date(end.getTime() - 15 * 60_000);
   const params = new URLSearchParams({
     symbols: symbol,
-    feed: 'iex',
+    feed,
     start: start.toISOString(),
     end: end.toISOString(),
     limit: '10000',
@@ -296,15 +300,16 @@ export async function fetchTradesWindow(
   symbol: string,
   tickIso: string,
   c: FetchCtx = {},
+  feed: QuoteFeed = 'iex',
 ): Promise<StoredTrade[]> {
-  const file = tradesPath(symbol, tickIso);
+  const file = tradesPath(symbol, tickIso, feed);
   if (fresh(file)) return readJson<StoredTrade[]>(file)!;
   const ctx = ctxOf(c);
   const end = new Date(tickIso);
   const start = new Date(end.getTime() - 15 * 60_000);
   const params = new URLSearchParams({
     symbols: symbol,
-    feed: 'iex',
+    feed,
     start: start.toISOString(),
     end: end.toISOString(),
     limit: '10000',

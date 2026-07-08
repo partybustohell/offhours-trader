@@ -482,14 +482,18 @@ export async function runEpisode(
     }
     return rows;
   };
+  // 'iex' = production parity (executor sees what live getLatestQuotes would);
+  // 'sip' = consolidated-tape realism mode for strategy economics. Reported
+  // runs must label which feed produced them.
+  const quoteFeed = process.env.BACKTEST_QUOTE_FEED === 'sip' ? ('sip' as const) : ('iex' as const);
   const quotesWindow = async (symbol: string, tickIso: string): Promise<StoredQuote[]> =>
     args.offline || args.countOnly
-      ? (readJson<StoredQuote[]>(quotesPath(symbol, tickIso)) ?? [])
-      : fetchQuotesWindow(symbol, tickIso);
+      ? (readJson<StoredQuote[]>(quotesPath(symbol, tickIso, quoteFeed)) ?? [])
+      : fetchQuotesWindow(symbol, tickIso, {}, quoteFeed);
   const tradesWindow = async (symbol: string, tickIso: string): Promise<StoredTrade[]> =>
     args.offline || args.countOnly
-      ? (readJson<StoredTrade[]>(tradesPath(symbol, tickIso)) ?? [])
-      : fetchTradesWindow(symbol, tickIso);
+      ? (readJson<StoredTrade[]>(tradesPath(symbol, tickIso, quoteFeed)) ?? [])
+      : fetchTradesWindow(symbol, tickIso, {}, quoteFeed);
 
   const newsPool: NewsItem[] = [...loadNewsDay(day), ...loadNewsDay(d1)].map((n) => ({
     headline: n.headline,
