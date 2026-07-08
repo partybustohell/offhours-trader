@@ -15,7 +15,11 @@ agent_weights:
   macro: 0.6
   sentiment: 1
   bear: 1.2
-conviction_threshold: 0.65
+# 0.55 chosen from the Jan-Jun 2026 backtest sweep: under directional
+# normalization the score distribution tops out near 0.65 (1 trade/50 days);
+# 0.55 trades ~7 per 50 sampled days with all downstream gates active. No
+# positive edge is established at any threshold — paper soak is the test.
+conviction_threshold: 0.55
 quorum: 3
 min_agreeing: 2
 max_position_pct: 5
