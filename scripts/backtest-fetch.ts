@@ -16,12 +16,12 @@ import {
 const log = (msg: string) => console.log(`[fetch ${new Date().toISOString().slice(11, 19)}] ${msg}`);
 const ctx = { log, limiter: new RateLimiter(180) };
 
-async function daily(): Promise<void> {
+async function daily(feed: 'sip' | 'iex'): Promise<void> {
   const universe = await fetchUniverse(ctx);
   const symbols = universe.map((a) => a.symbol);
-  log(`daily bars for ${symbols.length} symbols, feed=sip`);
-  await fetchDailyBars(symbols, 'sip', ctx);
-  log('daily bars sip done');
+  log(`daily bars for ${symbols.length} symbols, feed=${feed}`);
+  await fetchDailyBars(symbols, feed, ctx);
+  log(`daily bars ${feed} done`);
 }
 
 async function news(): Promise<void> {
@@ -66,7 +66,8 @@ async function main(): Promise<void> {
     const cal = await fetchCalendar(ctx);
     log(`calendar: ${cal.length} trading days ${WINDOW.start}..${WINDOW.end}`);
   }
-  if (cmd === 'daily' || cmd === 'all') await daily();
+  if (cmd === 'daily' || cmd === 'all') await daily('sip');
+  if (cmd === 'daily-iex' || cmd === 'all') await daily('iex');
   if (cmd === 'news' || cmd === 'all') await news();
   if (cmd === 'actions' || cmd === 'all') {
     const a = await fetchActions(ctx);
