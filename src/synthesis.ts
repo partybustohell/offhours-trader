@@ -31,15 +31,26 @@ export function computeThesisEntries(
       continue;
     }
 
-    const respondingWeightSum = vs.reduce((sum, v) => sum + cfg.agent_weights[v.analyst], 0);
-    const longScore =
-      vs.filter((v) => v.direction === 'long')
-        .reduce((sum, v) => sum + cfg.agent_weights[v.analyst] * v.conviction, 0) /
-      respondingWeightSum;
-    const shortScore =
-      vs.filter((v) => v.direction === 'short')
-        .reduce((sum, v) => sum + cfg.agent_weights[v.analyst] * v.conviction, 0) /
-      respondingWeightSum;
+    // Scores normalize over DIRECTIONAL weight only: abstentions ('none')
+    // count toward quorum but never dilute a side's conviction. Opposing
+    // directional votes DO dilute it, so the bear's veto power runs through
+    // actual contrary verdicts, not through silence. Without this, five
+    // abstention-friendly analysts cap the score near 0.45 and no threshold
+    // in the configurable range is reachable (measured in the 2026-01..06
+    // backtest: max composite 0.467 under responding-weight normalization).
+    const longs = vs.filter((v) => v.direction === 'long');
+    const shorts = vs.filter((v) => v.direction === 'short');
+    const weightOf = (list: Verdict[]) =>
+      list.reduce((sum, v) => sum + cfg.agent_weights[v.analyst], 0);
+    const scoreOf = (list: Verdict[]) =>
+      list.reduce((sum, v) => sum + cfg.agent_weights[v.analyst] * v.conviction, 0);
+    const directionalWeightSum = weightOf(longs) + weightOf(shorts);
+    if (directionalWeightSum === 0) {
+      skipped.push({ ticker, reason: 'below threshold' });
+      continue;
+    }
+    const longScore = scoreOf(longs) / directionalWeightSum;
+    const shortScore = scoreOf(shorts) / directionalWeightSum;
 
     if (Math.min(longScore, shortScore) >= 0.3) {
       skipped.push({ ticker, reason: 'disagreement' });
@@ -47,6 +58,12 @@ export function computeThesisEntries(
     }
 
     const direction: 'long' | 'short' = longScore >= shortScore ? 'long' : 'short';
+    const agreeing = direction === 'long' ? longs : shorts;
+    // A single analyst must not move money alone, however convinced.
+    if (agreeing.length < cfg.min_agreeing) {
+      skipped.push({ ticker, reason: 'agreement quorum' });
+      continue;
+    }
     const weightedConviction = direction === 'long' ? longScore : shortScore;
     if (weightedConviction < cfg.conviction_threshold) {
       skipped.push({ ticker, reason: 'below threshold' });

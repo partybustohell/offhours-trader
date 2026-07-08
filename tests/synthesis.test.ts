@@ -27,33 +27,49 @@ function mi(lastPrice: number, ticker = 'NVDA'): Map<string, TickerMarketInfo> {
 }
 
 describe('computeThesisEntries', () => {
-  it('normalizes by responding weights; none-verdicts count toward quorum but not scores', () => {
-    // Default weights: fundamental 1.0, sentiment 1.0, bear 1.2 -> responding sum 3.2.
-    // longScore = (1.0*0.8 + 1.0*0.9) / 3.2 = 1.7/3.2 = 0.53125
+  it('normalizes over directional weight only; none-verdicts count toward quorum but never dilute', () => {
+    // fundamental 1.0 and sentiment 1.0 agree long; bear 'none' counts toward
+    // quorum but stays out of numerator AND denominator.
+    // longScore = (1.0*0.8 + 1.0*0.9) / (1.0 + 1.0) = 1.7/2.0 = 0.85
     const verdicts = [
       v('fundamental', 'long', 0.8),
       v('sentiment', 'long', 0.9),
       v('bear', 'none', 0.7), // conviction on 'none' must not affect scores
     ];
 
-    // Quorum of 3 is met (the 'none' verdict counts) but 0.53125 < default 0.65 threshold.
-    const below = computeThesisEntries(verdicts, mi(100), account(100_000), cfg());
-    expect(below.entries).toEqual([]);
-    expect(below.skipped).toEqual([{ ticker: 'NVDA', reason: 'below threshold' }]);
-
-    const { entries, skipped } = computeThesisEntries(
-      verdicts,
-      mi(100),
-      account(100_000),
-      cfg({ conviction_threshold: 0.5 }),
-    );
+    const { entries, skipped } = computeThesisEntries(verdicts, mi(100), account(100_000), cfg());
     expect(skipped).toEqual([]);
     expect(entries).toHaveLength(1);
     const e = entries[0]!;
     expect(e.direction).toBe('long');
-    expect(e.weightedConviction).toBeCloseTo(0.53125, 10);
-    // min(2000, 100000*5%) = 2000; 2000 * 0.53125 = 1062.50
-    expect(e.targetNotionalUsd).toBeCloseTo(1062.5, 2);
+    expect(e.weightedConviction).toBeCloseTo(0.85, 10);
+    // min(2000, 100000*5%) = 2000; 2000 * 0.85 = 1700.00
+    expect(e.targetNotionalUsd).toBeCloseTo(1700, 2);
+  });
+
+  it('opposing directional votes DO dilute: the bear vetoes through contrary verdicts', () => {
+    // longs 1.0*0.8 + 1.0*0.9 = 1.7; bear short 1.2*0.85 = 1.02; directional
+    // weight 3.2 -> longScore 0.53125, shortScore 0.31875 -> both >= 0.3.
+    const { entries, skipped } = computeThesisEntries(
+      [v('fundamental', 'long', 0.8), v('sentiment', 'long', 0.9), v('bear', 'short', 0.85)],
+      mi(100),
+      account(100_000),
+      cfg(),
+    );
+    expect(entries).toEqual([]);
+    expect(skipped).toEqual([{ ticker: 'NVDA', reason: 'disagreement' }]);
+  });
+
+  it('a single agreeing analyst cannot trade alone: agreement quorum', () => {
+    // Lone long at 0.95 scores 0.95 (clears the threshold) but min_agreeing 2 blocks it.
+    const { entries, skipped } = computeThesisEntries(
+      [v('fundamental', 'long', 0.95), v('sentiment', 'none', 0.8), v('bear', 'none', 0.7)],
+      mi(100),
+      account(100_000),
+      cfg(),
+    );
+    expect(entries).toEqual([]);
+    expect(skipped).toEqual([{ ticker: 'NVDA', reason: 'agreement quorum' }]);
   });
 
   it('skips tickers with fewer verdicts than quorum', () => {
@@ -68,8 +84,8 @@ describe('computeThesisEntries', () => {
   });
 
   it('skips on disagreement when both scores are >= 0.3 (boundary included)', () => {
-    // Weights: fundamental 1.0, technical 0.8, macro 0.6 -> sum 2.4.
-    // longScore = 0.9/2.4 = 0.375; shortScore = 0.8*0.9/2.4 = 0.3 -> min >= 0.3.
+    // Directional weight: fundamental 1.0 + technical 0.8 = 1.8 ('none' excluded).
+    // longScore = 0.9/1.8 = 0.5; shortScore = 0.8*0.9/1.8 = 0.4 -> min >= 0.3.
     const { entries, skipped } = computeThesisEntries(
       [v('fundamental', 'long', 0.9), v('technical', 'short', 0.9), v('macro', 'none', 0)],
       mi(100),
@@ -81,15 +97,15 @@ describe('computeThesisEntries', () => {
   });
 
   it('does not flag disagreement when the minority score is below 0.3', () => {
-    // shortScore = 0.8*0.85/2.4 = 0.2833... < 0.3 -> no disagreement;
-    // longScore = 0.9/2.4 = 0.375 < 0.65 -> below threshold.
+    // Directional weight 1.8: shortScore = 0.8*0.6/1.8 = 0.2666... < 0.3 -> no
+    // disagreement; direction long with ONE agreeing analyst -> agreement quorum.
     const { skipped } = computeThesisEntries(
-      [v('fundamental', 'long', 0.9), v('technical', 'short', 0.85), v('macro', 'none', 0)],
+      [v('fundamental', 'long', 0.9), v('technical', 'short', 0.6), v('macro', 'none', 0)],
       mi(100),
       account(100_000),
       cfg(),
     );
-    expect(skipped).toEqual([{ ticker: 'NVDA', reason: 'below threshold' }]);
+    expect(skipped).toEqual([{ ticker: 'NVDA', reason: 'agreement quorum' }]);
   });
 
   it('computes the long limit band from max_drop_pct below and max_chase_pct above', () => {
@@ -106,8 +122,8 @@ describe('computeThesisEntries', () => {
   });
 
   it('mirrors the band for shorts: max_chase_pct below, max_drop_pct above', () => {
-    // Weights: bear 1.2, technical 0.8, macro 0.6 -> sum 2.6.
-    // shortScore = (1.2*0.9 + 0.8*0.8)/2.6 = 1.72/2.6 = 0.66153... >= 0.65.
+    // Directional weight: bear 1.2 + technical 0.8 = 2.0 ('none' excluded).
+    // shortScore = (1.2*0.9 + 0.8*0.8)/2.0 = 1.72/2.0 = 0.86 >= 0.65.
     const { entries } = computeThesisEntries(
       [v('bear', 'short', 0.9), v('technical', 'short', 0.8), v('macro', 'none', 0)],
       mi(100),
@@ -116,7 +132,7 @@ describe('computeThesisEntries', () => {
     );
     const e = entries[0]!;
     expect(e.direction).toBe('short');
-    expect(e.weightedConviction).toBeCloseTo(1.72 / 2.6, 10);
+    expect(e.weightedConviction).toBeCloseTo(0.86, 10);
     expect(e.limitBand.low).toBeCloseTo(99, 10);
     expect(e.limitBand.high).toBeCloseTo(103, 10);
   });
@@ -132,14 +148,16 @@ describe('computeThesisEntries', () => {
   });
 
   it('rounds targetNotionalUsd to cents', () => {
-    // sum 3.2; longScore = (0.777 + 0.888)/3.2 = 0.5203125; 2000 * that = 1040.625 -> 1040.63
+    // Directional weight: fundamental 1.0 + technical 0.8 = 1.8.
+    // longScore = (0.777 + 0.8*0.888)/1.8 = 1.4874/1.8 = 0.8263333...;
+    // 2000 * that = 1652.666... -> 1652.67
     const { entries } = computeThesisEntries(
-      [v('fundamental', 'long', 0.777), v('sentiment', 'long', 0.888), v('bear', 'none', 0)],
+      [v('fundamental', 'long', 0.777), v('technical', 'long', 0.888), v('bear', 'none', 0)],
       mi(100),
       account(100_000),
       cfg({ conviction_threshold: 0.5 }),
     );
-    expect(entries[0]!.targetNotionalUsd).toBe(1040.63);
+    expect(entries[0]!.targetNotionalUsd).toBe(1652.67);
   });
 
   it('skips with no market data even when conviction passes', () => {

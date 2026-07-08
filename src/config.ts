@@ -32,6 +32,7 @@ export const ConfigSchema = z.object({
     .default({}),
   conviction_threshold: z.number().min(0).max(1).default(0.65),
   quorum: z.number().int().min(1).max(5).default(3),
+  min_agreeing: z.number().int().min(1).max(5).default(2),
   max_position_pct: z.number().positive().default(5),
   max_daily_deploy_pct: z.number().positive().default(10),
   max_order_notional_usd: z.number().positive().default(2000),

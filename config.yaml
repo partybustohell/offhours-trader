@@ -17,6 +17,7 @@ agent_weights:
   bear: 1.2
 conviction_threshold: 0.65
 quorum: 3
+min_agreeing: 2
 max_position_pct: 5
 max_daily_deploy_pct: 10
 max_order_notional_usd: 2000

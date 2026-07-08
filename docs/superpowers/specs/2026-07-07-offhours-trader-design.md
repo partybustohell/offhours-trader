@@ -111,8 +111,17 @@ An analyst that errors or times out is dropped for the run.
 
 Inputs: all verdicts + config. Output: `thesis.json`.
 
-- Weighted conviction = Σ(agent conviction × configured agent weight), normalized.
+- Weighted conviction = Σ(weight × conviction over verdicts agreeing with the
+  direction) ÷ Σ(weight over ALL directional verdicts, long + short).
+  Abstentions (`none`) count toward quorum but never enter the denominator;
+  opposing directional votes DO dilute the score, so the bear's veto runs
+  through contrary verdicts, not silence. (Rev 2, 2026-07-09: the original
+  normalized over all responding analysts' weights, which capped the score at
+  an empirical 0.467 in the Jan–Jun 2026 backtest — unreachable by any
+  configurable threshold.)
 - **Quorum:** fewer than `quorum` (default 3 of 5) verdicts on a ticker → no thesis.
+- **Agreement quorum:** fewer than `min_agreeing` (default 2) analysts backing
+  the chosen direction → no thesis; one analyst never moves money alone.
 - **Threshold:** weighted conviction below `conviction_threshold` → no thesis.
 - **Disagreement guard:** if opposing directions each carry normalized weighted
   conviction ≥ 0.3, no thesis for that ticker.

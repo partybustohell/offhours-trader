@@ -287,18 +287,16 @@ describe('synthesis: hand-computed conviction, skips, bands, sizing', () => {
 
   it('NVDA: weighted conviction, band, sizing, invalidation union', () => {
     const nvda = computed.entries[0]!;
-    // All five respond: weight sum = 1.0+0.8+0.6+1.0+1.2 = 4.6.
-    // Long verdicts F/T/M/S all at 0.9; bear 'none' 0.5 counts toward the
-    // denominator (and quorum) but adds nothing to the score:
-    //   longScore = 0.9*(1.0+0.8+0.6+1.0)/4.6 = 0.9*3.4/4.6 = 3.06/4.6
-    //             = 0.66521739... >= 0.65 threshold.
-    expect(nvda.weightedConviction).toBeCloseTo(3.06 / 4.6, 10);
+    // Directional normalization: long verdicts F/T/M/S all at 0.9, directional
+    // weight = 1.0+0.8+0.6+1.0 = 3.4; bear 'none' 0.5 counts toward quorum but
+    // stays out of the denominator:
+    //   longScore = 0.9*3.4/3.4 = 0.9 >= 0.65 threshold.
+    expect(nvda.weightedConviction).toBeCloseTo(0.9, 10);
     // Long band around lastPrice 100: low 100*(1-3%) = 97, high 100*(1+1%) = 101.
     expect(nvda.limitBand.low).toBeCloseTo(97, 10);
     expect(nvda.limitBand.high).toBeCloseTo(101, 10);
-    // Sizing: min(2000, 100000*5% = 5000) = 2000 base;
-    //   2000 * 3.06/4.6 = 1330.4347... -> 1330.43 rounded to cents.
-    expect(nvda.targetNotionalUsd).toBe(1330.43);
+    // Sizing: min(2000, 100000*5% = 5000) = 2000 base; 2000 * 0.9 = 1800.00.
+    expect(nvda.targetNotionalUsd).toBe(1800);
     // Union of invalidation conditions from long verdicts only (F, T, M, S);
     // macro repeats fundamental's condition and is deduplicated.
     expect(nvda.invalidationConditions).toEqual([
@@ -311,15 +309,15 @@ describe('synthesis: hand-computed conviction, skips, bands, sizing', () => {
   it('COIN: bear-led short with mirrored band', () => {
     const coin = computed.entries[1]!;
     // Responders T(0.8) short 0.8, M(0.6) none 0.3, B(1.2) short 0.9:
-    //   weight sum = 0.8+0.6+1.2 = 2.6
-    //   shortScore = (0.8*0.8 + 1.2*0.9)/2.6 = (0.64+1.08)/2.6 = 1.72/2.6
-    //              = 0.66153846... >= 0.65 threshold; longScore 0 -> no disagreement.
-    expect(coin.weightedConviction).toBeCloseTo(1.72 / 2.6, 10);
+    //   directional weight = 0.8+1.2 = 2.0 ('none' excluded)
+    //   shortScore = (0.8*0.8 + 1.2*0.9)/2.0 = 1.72/2.0 = 0.86 >= 0.65;
+    //   longScore 0 -> no disagreement; two agreeing shorts meet min_agreeing.
+    expect(coin.weightedConviction).toBeCloseTo(0.86, 10);
     // Short band around lastPrice 250: low 250*(1-1%) = 247.5, high 250*(1+3%) = 257.5.
     expect(coin.limitBand.low).toBeCloseTo(247.5, 10);
     expect(coin.limitBand.high).toBeCloseTo(257.5, 10);
-    // 2000 * 1.72/2.6 = 1323.0769... -> 1323.08.
-    expect(coin.targetNotionalUsd).toBe(1323.08);
+    // 2000 * 0.86 = 1720.00.
+    expect(coin.targetNotionalUsd).toBe(1720);
     expect(coin.invalidationConditions).toEqual([
       'COIN reclaims 252 on volume',
       'Enforcement action dismissed or settled',
@@ -351,17 +349,17 @@ describe('executor tick replay (dry-run gate math + risk gate)', () => {
     // spread = (100.10-100.00)/100.05 * 10000 = 9.995 bps <= 50; sizes 5/4 >= 1;
     // last 100.05 inside [97, 101];
     // limitPrice = min(ask 100.10, band.high 101) = 100.10;
-    // qty = floor(1330.43 / 100.10) = floor(13.291...) = 13.
+    // qty = floor(1800 / 100.10) = floor(17.98...) = 17.
     expect(outcome.skip).toBeNull();
     expect(outcome.order).toEqual({
       ticker: 'NVDA',
       side: 'buy',
-      qty: 13,
+      qty: 17,
       limitPrice: 100.1,
       intent: 'entry',
       reason: 'thesis entry conditions hold',
     });
-    // notional 13*100.10 = 1301.30 <= 2000 order cap, <= 5000 position cap,
+    // notional 17*100.10 = 1701.70 <= 2000 order cap, <= 5000 position cap,
     // <= 10000 daily deploy cap; nothing halted, no duplicates.
     expect(riskCheck(outcome.order!, riskCtx(false))).toEqual({ allowed: true, reasons: [] });
   });
