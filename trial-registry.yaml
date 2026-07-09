@@ -1,0 +1,27 @@
+# Typed trial registry — the machine-readable source of truth for the quant
+# testing plan (docs/QUANT-TESTING-PLAN.md). Every ALPHA-signal test is
+# pre-registered here BEFORE its results are read. `pnpm preflight` refuses to
+# start if an ENABLED alpha flag has no matching type:alpha row. nTrials for the
+# deflated-Sharpe multiple-testing gate = the count of type:alpha rows.
+#
+# To test a signal: add a row { flag: <config path>, type: alpha, status:
+# pre-registered, enabledDate, horizonDays, targetActiveN } BEFORE enabling it.
+trials:
+  - id: rev2-sweep
+    date: "2026-01"
+    flag: conviction_threshold
+    type: alpha
+    status: complete
+    notes: "Jan-Jun 2026 threshold sweep -> 0.55 shipped; no positive edge established at any threshold."
+  - id: quant-p0-guardrails
+    date: "2026-07-09"
+    flag: p0-guardrails
+    type: guardrail
+    status: shipped
+    notes: "deploy_priority, min-position floor, max-open-names, timing blackout, gross/net caps; safe-by-construction, always-on."
+  - id: quant-p1-p3-machinery
+    date: "2026-07-09"
+    flag: p1-p3-machinery
+    type: guardrail
+    status: shipped-flag-off
+    notes: "All P1-P3 signals built inert. Enabling ANY signal requires a new type:alpha row for its specific flag first."

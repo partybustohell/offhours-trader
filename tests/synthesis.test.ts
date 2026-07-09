@@ -285,6 +285,22 @@ describe('computeThesisEntries — priority ordering, floor, and name cap', () =
     expect(entries.map((e) => e.ticker)).toEqual(['AAA', 'CCC']);
     expect(skipped).toContainEqual({ ticker: 'BBB', reason: 'over max_open_names' });
   });
+
+  it('attaches leave-one-out sizing attribution when a signal shrinks the size', () => {
+    const regime = { longScalar: 0.5, shortScalar: 1, volScalar: 1, thresholdBump: 0, state: 'trend:hostile' };
+    const { entries } = computeThesisEntries(longs('AAA', 0.9), multiMi({ AAA: { price: 100 } }), account(100_000), cfg(t50), regime);
+    const e = entries[0]!;
+    expect(e.sizing).toBeDefined();
+    expect(e.sizing!.scalars.regime_dir).toBeCloseTo(0.5, 10);
+    expect(e.sizing!.product).toBeCloseTo(0.5, 10);
+    expect(e.sizing!.leaveOneOut.regime_dir).toBeCloseTo(1, 10); // remove it -> full size
+    expect(e.targetNotionalUsd).toBeCloseTo(900, 2); // 2000 * 0.9 * volScalar 1 * 0.5
+  });
+
+  it('omits sizing attribution when no signal fires (flag-off default)', () => {
+    const { entries } = computeThesisEntries(longs('AAA', 0.9), multiMi({ AAA: { price: 100 } }), account(100_000), cfg(t50));
+    expect(entries[0]!.sizing).toBeUndefined();
+  });
 });
 
 describe('computeThesisEntries — P1–P3 signals (opt-in, down-only / gate)', () => {

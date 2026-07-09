@@ -385,6 +385,8 @@ interface SweepCell {
   id: string;
   threshold: number;
   bearWeight: number;
+  /** Optional deep config override, e.g. to enable one signal (signal-toggle cells). */
+  patch?: (c: Config) => Config;
 }
 
 function sweepCells(): SweepCell[] {
@@ -401,12 +403,43 @@ function sweepCells(): SweepCell[] {
   return cells;
 }
 
-function cellConfig(cfg: Config, cell: SweepCell): Config {
-  return {
+/**
+ * Enablers for the signal-toggle sweep: one config patch per ALPHA signal that
+ * turns exactly that signal on (the disprove funnel of docs/QUANT-TESTING-PLAN.md).
+ * Signals never enter the LLM prompt, so on/off cells share byte-identical cached
+ * LLM inputs — the difference is a clean same-inputs counterfactual.
+ */
+export const SIGNAL_ENABLERS: { flag: string; patch: (c: Config) => Config }[] = [
+  { flag: 'signals.anti_chase', patch: (c) => ({ ...c, signals: { ...c.signals, anti_chase: { ...c.signals.anti_chase, enabled: true } } }) },
+  { flag: 'signals.amihud', patch: (c) => ({ ...c, signals: { ...c.signals, amihud: { ...c.signals.amihud, enabled: true } } }) },
+  { flag: 'signals.dispersion', patch: (c) => ({ ...c, signals: { ...c.signals, dispersion: { ...c.signals.dispersion, enabled: true, k: c.signals.dispersion.k || 1 } } }) },
+  { flag: 'signals.trend_gate', patch: (c) => ({ ...c, signals: { ...c.signals, trend_gate: { ...c.signals.trend_gate, enabled: true } } }) },
+  { flag: 'signals.gap', patch: (c) => ({ ...c, signals: { ...c.signals, gap: { ...c.signals.gap, enabled: true } } }) },
+  { flag: 'signals.low_vol', patch: (c) => ({ ...c, signals: { ...c.signals, low_vol: { prefer_low_vol: true } } }) },
+  { flag: 'regime.trend', patch: (c) => ({ ...c, regime: { ...c.regime, trend: { ...c.regime.trend, enabled: true } } }) },
+  { flag: 'regime.vol', patch: (c) => ({ ...c, regime: { ...c.regime, vol: { ...c.regime.vol, enabled: true } } }) },
+  { flag: 'regime.gross', patch: (c) => ({ ...c, regime: { ...c.regime, gross: { ...c.regime.gross, enabled: true } } }) },
+  { flag: 'portfolio.target_vol', patch: (c) => ({ ...c, portfolio: { ...c.portfolio, target_vol: { ...c.portfolio.target_vol, enabled: true } } }) },
+  { flag: 'portfolio.inverse_vol', patch: (c) => ({ ...c, portfolio: { ...c.portfolio, sizing_mode: 'inverse_vol' } }) },
+  { flag: 'execution.cost_scalar', patch: (c) => ({ ...c, execution: { ...c.execution, cost_scalar: { ...c.execution.cost_scalar, enabled: true } } }) },
+  { flag: 'execution.participation', patch: (c) => ({ ...c, execution: { ...c.execution, participation: { ...c.execution.participation, enabled: true } } }) },
+];
+
+/** Baseline (all off) + one cell per signal enabler, at the shipped threshold/bear. */
+export function signalToggleCells(threshold = 0.55, bearWeight = 1.2): SweepCell[] {
+  return [
+    { id: 'baseline', threshold, bearWeight },
+    ...SIGNAL_ENABLERS.map((e) => ({ id: `sig-${e.flag}`, threshold, bearWeight, patch: e.patch })),
+  ];
+}
+
+export function cellConfig(cfg: Config, cell: SweepCell): Config {
+  const base: Config = {
     ...cfg,
     conviction_threshold: cell.threshold,
     agent_weights: { ...cfg.agent_weights, bear: cell.bearWeight },
   };
+  return cell.patch ? cell.patch(base) : base;
 }
 
 export function collectEpisodeResults(dir: string): EpisodeResult[] {
@@ -433,12 +466,20 @@ function tradedPairCount(tag: string): number {
   return pairs.size;
 }
 
-export async function sweepCommand(tag: string, concurrency = 4, offline = false): Promise<void> {
+export async function sweepCommand(
+  tag: string,
+  concurrency = 4,
+  offline = false,
+  mode: 'threshold' | 'signals' = 'threshold',
+): Promise<void> {
   const sample = loadSample();
   const cfg = loadConfig();
   const episodes = sample.episodes.filter((e) => fileExists(prepPath(e.day)));
   if (episodes.length === 0) throw new Error('no prep files found — run precompute first');
-  let cells = sweepCells();
+  // 'signals' mode: baseline vs one-signal-on cells (disprove funnel). Signals
+  // aren't in the LLM prompt, so all cells share the cached LLM calls -> the
+  // fresh-call budget stays ~baseline regardless of cell count.
+  let cells = mode === 'signals' ? signalToggleCells() : sweepCells();
 
   // Fresh-call budget FIRST: canonical judge-cache misses per cell (count-only
   // pass; nothing fetched, nothing persisted) plus probe arm 2 (2 calls per
@@ -475,7 +516,7 @@ export async function sweepCommand(tag: string, concurrency = 4, offline = false
       `+ probe arm 2 ${arm2Calls} (2 x traded pairs) = ${budgetTotal} (limit ${SWEEP_BUDGET_LIMIT}; ` +
       `non-judge misses ${otherMisses} reported, not budgeted)`,
   );
-  if (budgetTotal > SWEEP_BUDGET_LIMIT) {
+  if (budgetTotal > SWEEP_BUDGET_LIMIT && mode === 'threshold') {
     cells = cells.filter((c) => c.threshold >= SWEEP_THRESHOLD_FLOOR);
     budgetTotal = judgeTotal(cells) + arm2Calls;
     console.log(
@@ -628,7 +669,7 @@ async function main(): Promise<void> {
   if (cmd === 'sweep') {
     const tag = flagValue('tag');
     if (!tag) throw new Error('usage: backtest.ts sweep --tag T');
-    await sweepCommand(tag, numFlag('concurrency') ?? 4, hasFlag('offline'));
+    await sweepCommand(tag, numFlag('concurrency') ?? 4, hasFlag('offline'), hasFlag('signals') ? 'signals' : 'threshold');
     return;
   }
   if (cmd === 'report') {

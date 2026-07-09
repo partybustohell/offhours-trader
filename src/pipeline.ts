@@ -212,6 +212,17 @@ export async function runPipeline(deps: PipelineDeps = {}): Promise<Thesis> {
     },
   };
   writeJsonAtomic(thesisPath(ymd, kind), thesis);
+  // Live counterfactual sizing record (MODELED): same-thesis leave-one-out, so
+  // each enabled signal's marginal effect on the notional is attributable. Only
+  // emitted when a signal shrank the size; feeds docs/QUANT-TESTING-PLAN.md.
+  for (const e of entries) {
+    if (e.sizing) {
+      appendAudit({
+        kind: 'counterfactual',
+        data: { ticker: e.ticker, direction: e.direction, targetNotionalUsd: e.targetNotionalUsd, sizing: e.sizing, note: 'MODELED same-thesis leave-one-out' },
+      });
+    }
+  }
   appendAudit({
     kind: 'thesis',
     data: {

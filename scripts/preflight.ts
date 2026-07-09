@@ -8,6 +8,11 @@ import { currentSession, nowET } from '../src/clock.js';
 import { readHaltState } from '../src/state.js';
 import { thesisPath, readJsonIfExists } from '../src/paths.js';
 import { AlpacaBroker } from '../src/broker/client.js';
+import {
+  alphaTrialCount,
+  loadTrialRegistry,
+  unregisteredEnabledAlphaFlags,
+} from '../src/trial-registry.js';
 import type { Thesis } from '../src/types.js';
 
 type Level = 'ok' | 'warn' | 'blocker';
@@ -41,6 +46,22 @@ async function main(): Promise<void> {
   }
   if (cfg.mode === 'live') warn('mode is LIVE — real money. Confirm this is intended.');
   if (cfg.mode === 'dry-run') ok('mode dry-run: orders are logged, never sent (safe)');
+
+  // Trial-registry gate: an ENABLED alpha signal must be pre-registered, so
+  // multiple-testing discipline is enforced, not just documented.
+  try {
+    const trials = loadTrialRegistry();
+    const unreg = unregisteredEnabledAlphaFlags(cfg, trials);
+    if (unreg.length > 0) {
+      blocker(
+        `enabled alpha signal(s) not pre-registered in trial-registry.yaml: ${unreg.join(', ')} — add a type:alpha row BEFORE enabling (docs/QUANT-TESTING-PLAN.md)`,
+      );
+    } else {
+      ok(`trial registry: ${alphaTrialCount(trials)} alpha trial(s); no unregistered enabled signals`);
+    }
+  } catch (err) {
+    blocker(`trial-registry.yaml invalid: ${err instanceof Error ? err.message : String(err)}`);
+  }
 
   // Broker reachability
   try {

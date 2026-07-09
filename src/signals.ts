@@ -165,6 +165,39 @@ export function combineScalars(scalars: number[], floor: number): number {
   return Math.max(floor, product);
 }
 
+export interface ScalarAttribution {
+  /** Each named signal's applied scalar (<= 1). */
+  applied: Record<string, number>;
+  /** combineScalars over ALL named scalars (floored). */
+  product: number;
+  /** combineScalars over all EXCEPT the named one (floored) — the size the
+   *  position would have had with that one signal removed. */
+  leaveOneOut: Record<string, number>;
+}
+
+/**
+ * Leave-one-out attribution of a floored product of down-only scalars.
+ * `leaveOneOut[name]` is RECOMPUTED over the reduced set, never divided out:
+ * the floor makes the product non-additive, so dividing a scalar back out would
+ * read a false 0 for a floor-bound signal. The marginal shrink attributable to
+ * a signal is `leaveOneOut[name] - product` (>= 0). Pure.
+ */
+export function attributeScalars(named: Record<string, number>, floor: number): ScalarAttribution {
+  const names = Object.keys(named);
+  const product = combineScalars(
+    names.map((n) => named[n]!),
+    floor,
+  );
+  const leaveOneOut: Record<string, number> = {};
+  for (const n of names) {
+    leaveOneOut[n] = combineScalars(
+      names.filter((m) => m !== n).map((m) => named[m]!),
+      floor,
+    );
+  }
+  return { applied: { ...named }, product, leaveOneOut };
+}
+
 // ---------- gates (return true = block the entry) ----------
 
 /** 12-1 / 52wk-high counter-trend veto: block entries that fight a strong trend. */

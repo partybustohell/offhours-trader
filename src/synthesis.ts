@@ -1,11 +1,11 @@
-import type { AccountSnapshot, ThesisEntry, Verdict } from './types.js';
+import type { AccountSnapshot, SizingAttribution, ThesisEntry, Verdict } from './types.js';
 import type { Config } from './config.js';
 import type { TickerMarketInfo } from './candidates.js';
 import { NEUTRAL_REGIME, type Regime } from './regime.js';
 import {
   amihudHaircut,
   antiChaseHaircut,
-  combineScalars,
+  attributeScalars,
   dispersionScalar,
   gapContraBlock,
   isChasing,
@@ -137,16 +137,31 @@ export function computeThesisEntries(
     // Down-only signal scalars (each <=1; exactly 1 when disabled), combined
     // multiplicatively with a floor so stacking can't collapse the position.
     // volScalar stays SEPARATE so legacy sizing is byte-identical when off.
-    const signalScalars = [
-      antiChaseHaircut(mi.recentReturnPct, direction, cfg.signals.anti_chase),
-      amihudHaircut(mi.amihudIlliquidity, cfg.signals.amihud),
-      dispersionScalar(agreeing.map((v) => v.conviction), cfg.signals.dispersion),
-      direction === 'long' ? regime.longScalar : regime.shortScalar,
-      regime.volScalar,
-    ];
-    const signalProduct = combineScalars(signalScalars, cfg.signal_scalar_floor);
+    const namedScalars: Record<string, number> = {
+      anti_chase: antiChaseHaircut(mi.recentReturnPct, direction, cfg.signals.anti_chase),
+      amihud: amihudHaircut(mi.amihudIlliquidity, cfg.signals.amihud),
+      dispersion: dispersionScalar(agreeing.map((v) => v.conviction), cfg.signals.dispersion),
+      regime_dir: direction === 'long' ? regime.longScalar : regime.shortScalar,
+      regime_vol: regime.volScalar,
+    };
+    const attr = attributeScalars(namedScalars, cfg.signal_scalar_floor);
     const targetNotionalUsd =
-      Math.round(baseNotional * weightedConviction * volScalar * signalProduct * 100) / 100;
+      Math.round(baseNotional * weightedConviction * volScalar * attr.product * 100) / 100;
+    // Counterfactual sizing record — only when a signal actually shrank the size,
+    // so the flag-off default carries nothing extra. Feeds the testing plan's
+    // leave-one-out attribution (docs/QUANT-TESTING-PLAN.md).
+    const sizing: SizingAttribution | undefined =
+      attr.product < 1
+        ? {
+            baseNotional,
+            weightedConviction,
+            volScalar,
+            floor: cfg.signal_scalar_floor,
+            scalars: attr.applied,
+            product: attr.product,
+            leaveOneOut: attr.leaveOneOut,
+          }
+        : undefined;
 
     const invalidationConditions = [
       ...new Set(
@@ -156,7 +171,15 @@ export function computeThesisEntries(
       ),
     ];
 
-    entries.push({ ticker, direction, weightedConviction, limitBand, targetNotionalUsd, invalidationConditions });
+    entries.push({
+      ticker,
+      direction,
+      weightedConviction,
+      limitBand,
+      targetNotionalUsd,
+      invalidationConditions,
+      ...(sizing ? { sizing } : {}),
+    });
   }
 
   // Whole-book portfolio sizing (P2, flag-off): covariance vol-targeting and/or

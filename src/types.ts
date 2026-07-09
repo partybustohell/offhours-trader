@@ -40,6 +40,25 @@ export interface VerdictFile {
   droppedAnalysts: AnalystName[];
 }
 
+/**
+ * Counterfactual sizing record for a thesis entry: how the notional was built
+ * and what it would have been with each down-only signal removed (leave-one-out).
+ * Present only when at least one signal was non-trivial. The primitive the quant
+ * testing plan attributes signal effect from (docs/QUANT-TESTING-PLAN.md).
+ */
+export interface SizingAttribution {
+  baseNotional: number;
+  weightedConviction: number;
+  volScalar: number;
+  floor: number;
+  /** each signal's applied scalar (<= 1). */
+  scalars: Record<string, number>;
+  /** combined floored product actually applied. */
+  product: number;
+  /** combined product with each signal removed (leave-one-out). */
+  leaveOneOut: Record<string, number>;
+}
+
 export interface ThesisEntry {
   ticker: string;
   direction: 'long' | 'short';
@@ -48,6 +67,8 @@ export interface ThesisEntry {
   targetNotionalUsd: number;
   narrative: string;
   invalidationConditions: string[];
+  /** Present when a down-only signal shrank the size (product < 1). */
+  sizing?: SizingAttribution;
 }
 export type ThesisKind = 'offhours' | 'rth';
 
@@ -139,6 +160,7 @@ export interface AuditEvent {
     | 'order_placed'
     | 'order_rejected'
     | 'exit'
+    | 'counterfactual'
     | 'halt'
     | 'resume'
     | 'error';

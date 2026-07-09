@@ -14,6 +14,7 @@ import {
   dispersionScalar,
   costScalar,
   combineScalars,
+  attributeScalars,
   trendContraBlock,
   gapContraBlock,
   drawdownThrottle,
@@ -346,6 +347,33 @@ describe('combineScalars', () => {
 
   it('a floor of 0 lets the product through unclamped', () => {
     expect(combineScalars([0.1, 0.1], 0)).toBeCloseTo(0.01, 10);
+  });
+});
+
+describe('attributeScalars (leave-one-out counterfactual)', () => {
+  it('all-1 scalars: product 1 and every leave-one-out is 1', () => {
+    const a = attributeScalars({ x: 1, y: 1, z: 1 }, 0.2);
+    expect(a.product).toBe(1);
+    expect(a.leaveOneOut).toEqual({ x: 1, y: 1, z: 1 });
+  });
+
+  it('attributes a single active signal: removing it restores full size', () => {
+    // x=0.5 shrinks; y,z inactive. product 0.5; remove x -> 1; remove y or z -> 0.5.
+    const a = attributeScalars({ x: 0.5, y: 1, z: 1 }, 0.2);
+    expect(a.product).toBeCloseTo(0.5, 10);
+    expect(a.leaveOneOut.x).toBeCloseTo(1, 10); // marginal shrink of x = 1 - 0.5
+    expect(a.leaveOneOut.y).toBeCloseTo(0.5, 10);
+    expect(a.leaveOneOut.z).toBeCloseTo(0.5, 10);
+  });
+
+  it('floor-bound: recomputes leave-one-out, never divides out (no false 0)', () => {
+    // 0.5 * 0.3 = 0.15 -> floored to 0.2. Remove 0.5 -> max(0.2,0.3)=0.3;
+    // remove 0.3 -> max(0.2,0.5)=0.5. Both attributed positively; neither reads 0.
+    const a = attributeScalars({ p: 0.5, q: 0.3 }, 0.2);
+    expect(a.product).toBeCloseTo(0.2, 10);
+    expect(a.leaveOneOut.p).toBeCloseTo(0.3, 10);
+    expect(a.leaveOneOut.q).toBeCloseTo(0.5, 10);
+    // a naive divide-out would give p: 0.2/0.5=0.4 and q: 0.2/0.3=0.67 — wrong.
   });
 });
 
