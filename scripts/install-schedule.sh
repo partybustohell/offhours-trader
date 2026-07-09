@@ -11,6 +11,11 @@ set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 PNPM="$(command -v pnpm || echo /usr/local/bin/pnpm)"
+# launchd runs with a minimal PATH; pnpm needs node on PATH to work. Bake in
+# the dirs of the pnpm and node this shell resolved, plus the usual bins.
+NODE_BIN="$(dirname "$(command -v node || echo /usr/local/bin/node)")"
+PNPM_BIN="$(dirname "$PNPM")"
+LAUNCH_PATH="$PNPM_BIN:$NODE_BIN:/usr/local/bin:/usr/bin:/bin"
 AGENTS="$HOME/Library/LaunchAgents"
 mkdir -p "$AGENTS"
 
@@ -26,6 +31,8 @@ cat > "$PIPELINE_PLIST" <<PLIST
 <plist version="1.0"><dict>
   <key>Label</key><string>com.offhours.pipeline</string>
   <key>WorkingDirectory</key><string>$REPO</string>
+  <key>EnvironmentVariables</key>
+  <dict><key>PATH</key><string>$LAUNCH_PATH</string></dict>
   <key>ProgramArguments</key>
   <array><string>$PNPM</string><string>pipeline</string></array>
   <key>StartCalendarInterval</key>
@@ -43,6 +50,8 @@ cat > "$RTH_PIPELINE_PLIST" <<PLIST
 <plist version="1.0"><dict>
   <key>Label</key><string>com.offhours.pipeline-rth</string>
   <key>WorkingDirectory</key><string>$REPO</string>
+  <key>EnvironmentVariables</key>
+  <dict><key>PATH</key><string>$LAUNCH_PATH</string></dict>
   <key>ProgramArguments</key>
   <array><string>$PNPM</string><string>pipeline</string><string>rth</string></array>
   <key>StartCalendarInterval</key>
@@ -58,6 +67,8 @@ cat > "$TICK_PLIST" <<PLIST
 <plist version="1.0"><dict>
   <key>Label</key><string>com.offhours.tick</string>
   <key>WorkingDirectory</key><string>$REPO</string>
+  <key>EnvironmentVariables</key>
+  <dict><key>PATH</key><string>$LAUNCH_PATH</string></dict>
   <key>ProgramArguments</key>
   <array><string>$PNPM</string><string>tick</string></array>
   <key>StartInterval</key><integer>900</integer>
