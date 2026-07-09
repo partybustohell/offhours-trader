@@ -479,9 +479,16 @@ export async function sweepCommand(
   feedOverride?: 'iex' | 'sip',
 ): Promise<void> {
   const sample = loadSample();
-  // Feed override (does NOT touch config.yaml): IEX quotes are too thin in this
-  // window to fill, so a signal sweep needs SIP to have a trading baseline.
-  const cfg = feedOverride ? { ...loadConfig(), data_feed: feedOverride } : loadConfig();
+  // The backtest exercises the OFF-HOURS thesis (traded during premarket/
+  // afterhours), so enable those sessions regardless of the live config's
+  // operational toggle — else the executor no-ops and nothing places. Feed
+  // override (does NOT touch config.yaml): IEX is too thin to fill this window,
+  // so a signal sweep needs SIP for a trading baseline.
+  const cfg: Config = {
+    ...loadConfig(),
+    ...(feedOverride ? { data_feed: feedOverride } : {}),
+    sessions: { premarket: true, afterhours: true, regularhours: true },
+  };
   const episodes = sample.episodes.filter((e) => fileExists(prepPath(e.day)));
   if (episodes.length === 0) throw new Error('no prep files found — run precompute first');
   // 'signals' mode: baseline vs one-signal-on cells (disprove funnel). Signals
