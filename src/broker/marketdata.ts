@@ -1,6 +1,7 @@
 import type { QuoteSnapshot } from '../types.js';
 import type { FetchFn, SleepFn } from './client.js';
 import { defaultSleep, requestWithRetry } from './client.js';
+import { realizedVolAnnualized as realizedVolFromCloses } from '../candidates.js';
 
 const DATA_BASE_URL = 'https://data.alpaca.markets';
 const MAX_SYMBOLS_PER_CALL = 100;
@@ -37,6 +38,7 @@ export interface DailyBar {
 export interface MarketInfo {
   lastPrice: number;
   avgDollarVolume20d: number;
+  realizedVolAnnualized?: number;
 }
 
 interface RawQuote {
@@ -198,7 +200,8 @@ export class AlpacaMarketData {
       const recent = bars.slice(-20);
       const avgDollarVolume20d =
         recent.reduce((sum, b) => sum + b.c * b.v, 0) / recent.length;
-      out.set(symbol, { lastPrice: lastBar.c, avgDollarVolume20d });
+      const realizedVolAnnualized = realizedVolFromCloses(recent.map((b) => b.c));
+      out.set(symbol, { lastPrice: lastBar.c, avgDollarVolume20d, realizedVolAnnualized });
     }
     return out;
   }

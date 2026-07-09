@@ -86,7 +86,15 @@ export function computeThesisEntries(
       cfg.max_order_notional_usd,
       (account.equity * cfg.max_position_pct) / 100,
     );
-    const targetNotionalUsd = Math.round(baseNotional * weightedConviction * 100) / 100;
+    // Risk-parity: shrink the position when realized vol exceeds the target
+    // reference (never scale UP past the notional cap). Missing vol -> no
+    // scaling. This equalizes dollar risk across names of different volatility.
+    const volScalar =
+      mi.realizedVolAnnualized && mi.realizedVolAnnualized > 0
+        ? Math.min(1, cfg.target_vol_pct / 100 / mi.realizedVolAnnualized)
+        : 1;
+    const targetNotionalUsd =
+      Math.round(baseNotional * weightedConviction * volScalar * 100) / 100;
 
     const invalidationConditions = [
       ...new Set(

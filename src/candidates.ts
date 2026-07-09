@@ -4,6 +4,24 @@ import type { Config } from './config.js';
 export interface TickerMarketInfo {
   lastPrice: number;
   avgDollarVolume20d: number;
+  /** Annualized close-to-close realized vol; used for risk-parity sizing.
+   *  Optional so callers/data without it degrade to no vol scaling. */
+  realizedVolAnnualized?: number;
+}
+
+/**
+ * Annualized realized volatility from a series of closes (close-to-close log
+ * returns × √252). Returns undefined when there are too few points to be
+ * meaningful — the sizing layer treats that as "no scaling".
+ */
+export function realizedVolAnnualized(closes: number[]): number | undefined {
+  const c = closes.filter((x) => x > 0);
+  if (c.length < 8) return undefined;
+  const rets: number[] = [];
+  for (let i = 1; i < c.length; i++) rets.push(Math.log(c[i]! / c[i - 1]!));
+  const mean = rets.reduce((s, r) => s + r, 0) / rets.length;
+  const variance = rets.reduce((s, r) => s + (r - mean) ** 2, 0) / (rets.length - 1);
+  return Math.sqrt(variance) * Math.sqrt(252);
 }
 
 export function buildCandidates(

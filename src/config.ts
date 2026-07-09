@@ -35,6 +35,14 @@ export const ConfigSchema = z.object({
   min_agreeing: z.number().int().min(1).max(5).default(2),
   max_position_pct: z.number().positive().default(5),
   max_daily_deploy_pct: z.number().positive().default(10),
+  // Risk-parity sizing: a position is scaled DOWN when the name's annualized
+  // realized vol exceeds this reference, so dollar risk is roughly equal
+  // across names (an 80%-vol name gets half the size of a 40%-vol name).
+  target_vol_pct: z.number().positive().default(40),
+  // Deterministic per-position stop checked every executor tick, bypassing
+  // the LLM judge. Caps intra-session drawdown; cannot stop a closed-market
+  // overnight gap that jumps the level.
+  max_position_loss_pct: z.number().positive().default(8),
   max_order_notional_usd: z.number().positive().default(2000),
   max_spread_bps: z.number().positive().default(50),
   max_chase_pct: z.number().positive().default(1),

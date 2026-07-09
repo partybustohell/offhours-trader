@@ -273,7 +273,8 @@ describe('marketInfoFrom', () => {
       bars.push(bar(day, 10, 100)); // c*v = 1000 each
     }
     const out = marketInfoFrom(new Map([['SYM', bars]]), '2026-01-15');
-    expect(out.get('SYM')).toEqual({ lastPrice: 10, avgDollarVolume20d: 1000 });
+    // constant closes over the 20-bar window -> zero realized vol
+    expect(out.get('SYM')).toEqual({ lastPrice: 10, avgDollarVolume20d: 1000, realizedVolAnnualized: 0 });
   });
 
   it('averages over fewer than 20 bars when history is short', () => {

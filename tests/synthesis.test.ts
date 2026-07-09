@@ -60,6 +60,26 @@ describe('computeThesisEntries', () => {
     expect(skipped).toEqual([{ ticker: 'NVDA', reason: 'disagreement' }]);
   });
 
+  it('risk-parity sizing: high realized vol shrinks the position, low vol does not', () => {
+    const three = [
+      v('fundamental', 'long', 1),
+      v('sentiment', 'long', 1),
+      v('technical', 'long', 1),
+    ];
+    // Base notional min(2000, 100000*5%) = 2000; conviction 1.
+    // High vol 0.80 vs target 0.40 -> scalar 0.5 -> 1000.
+    const hi = new Map([['NVDA', { lastPrice: 100, avgDollarVolume20d: 1e9, realizedVolAnnualized: 0.8 }]]);
+    const hiEntry = computeThesisEntries(three, hi, account(100_000), cfg()).entries[0]!;
+    expect(hiEntry.targetNotionalUsd).toBeCloseTo(1000, 2);
+    // Low vol 0.20 -> scalar capped at 1 (never lever up) -> full 2000.
+    const lo = new Map([['NVDA', { lastPrice: 100, avgDollarVolume20d: 1e9, realizedVolAnnualized: 0.2 }]]);
+    const loEntry = computeThesisEntries(three, lo, account(100_000), cfg()).entries[0]!;
+    expect(loEntry.targetNotionalUsd).toBeCloseTo(2000, 2);
+    // Missing vol -> no scaling.
+    const none = computeThesisEntries(three, mi(100), account(100_000), cfg()).entries[0]!;
+    expect(none.targetNotionalUsd).toBeCloseTo(2000, 2);
+  });
+
   it('a single agreeing analyst cannot trade alone: agreement quorum', () => {
     // Lone long at 0.95 scores 0.95 (clears the threshold) but min_agreeing 2 blocks it.
     const { entries, skipped } = computeThesisEntries(

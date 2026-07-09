@@ -13,6 +13,7 @@
 import type { MarketInfo, MoverEntry, Movers, NewsItem } from '../broker/marketdata.js';
 import type { EpisodeSpec, SampleFile, StoredDailyBar, StoredNewsItem } from './types.js';
 import { WINDOW, etOffsetForDate, loadDailyBars, loadNewsDay, loadUniverse } from './data.js';
+import { realizedVolAnnualized as realizedVolFromCloses } from '../candidates.js';
 
 /** Production getMostActives() item minus trade_count (unavailable from bars). */
 export interface ActiveEntry {
@@ -232,7 +233,8 @@ export function marketInfoFrom(
     const lastBar = bars[bars.length - 1]!;
     const recent = bars.slice(-20);
     const avgDollarVolume20d = recent.reduce((sum, b) => sum + b.c * b.v, 0) / recent.length;
-    out.set(symbol, { lastPrice: lastBar.c, avgDollarVolume20d });
+    const realizedVolAnnualized = realizedVolFromCloses(recent.map((b) => b.c));
+    out.set(symbol, { lastPrice: lastBar.c, avgDollarVolume20d, realizedVolAnnualized });
   }
   return out;
 }

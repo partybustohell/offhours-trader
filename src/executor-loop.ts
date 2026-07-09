@@ -206,14 +206,34 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
       skip(ticker, 'no quote for exit check');
       continue;
     }
-    const decision = await judgeTick(
-      cfg,
-      { entry, quote, headlines: headlinesFor(ticker), position },
-      deps.llm,
-    );
-    if (!decision.exitPosition) continue;
-    appendAudit({ kind: 'exit', data: { ticker, reasons: decision.reasons } });
     const isLong = position.side === 'long';
+    // Deterministic per-position stop, evaluated BEFORE the judge: a hard
+    // loss limit is risk management, not a judgment call. A stopped position
+    // skips the LLM entirely.
+    const mark = isLong ? quote.bid : quote.ask;
+    const lossPct =
+      position.avgEntryPrice > 0
+        ? (isLong
+            ? (position.avgEntryPrice - mark) / position.avgEntryPrice
+            : (mark - position.avgEntryPrice) / position.avgEntryPrice) * 100
+        : 0;
+    const stopHit = lossPct >= cfg.max_position_loss_pct;
+
+    let exitReasons: string[] | null = null;
+    if (stopHit) {
+      exitReasons = [
+        `stop: unrealized loss ${lossPct.toFixed(1)}% >= max_position_loss_pct ${cfg.max_position_loss_pct}%`,
+      ];
+    } else {
+      const decision = await judgeTick(
+        cfg,
+        { entry, quote, headlines: headlinesFor(ticker), position },
+        deps.llm,
+      );
+      if (decision.exitPosition) exitReasons = decision.reasons;
+    }
+    if (!exitReasons) continue;
+    appendAudit({ kind: 'exit', data: { ticker, reasons: exitReasons, stop: stopHit } });
     const order: ProposedOrder = {
       ticker: entry.ticker,
       side: isLong ? 'sell' : 'buy',
@@ -223,7 +243,7 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
         ? Math.floor(quote.bid * 100) / 100
         : Math.ceil(quote.ask * 100) / 100,
       intent: 'exit',
-      reason: decision.reasons.join('; ') || 'invalidation triggered',
+      reason: exitReasons.join('; ') || 'invalidation triggered',
     };
     appendAudit({ kind: 'proposed_order', data: order });
     const risk = riskCheck(order, riskContext());

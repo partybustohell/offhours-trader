@@ -342,7 +342,8 @@ describe('AlpacaMarketData', () => {
     ]);
     const md = new AlpacaMarketData(paperEnv, fetchFn, noSleep);
     const info = await md.marketInfoFor(['MSFT']);
-    expect(info.get('MSFT')).toEqual({ lastPrice: 10, avgDollarVolume20d: 100 });
+    // constant closes -> zero realized vol
+    expect(info.get('MSFT')).toEqual({ lastPrice: 10, avgDollarVolume20d: 100, realizedVolAnnualized: 0 });
   });
 
   it('marketInfoFor omits symbols with no bars', async () => {

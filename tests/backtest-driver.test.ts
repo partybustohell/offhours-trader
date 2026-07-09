@@ -50,7 +50,9 @@ const ORIGINAL_CWD = process.cwd();
 const data = await import('../src/backtest/data.js');
 const { ConfigSchema } = await import('../src/config.js');
 
-const CFG = ConfigSchema.parse({}); // shipped defaults: threshold 0.65, quorum 3
+// Stop lifted to 50% so the existing fixtures exercise the JUDGE exit path;
+// a dedicated test below drives the deterministic stop at the default 8%.
+const CFG = ConfigSchema.parse({ max_position_loss_pct: 50 });
 const ANALYSTS = ['fundamental', 'technical', 'macro', 'sentiment', 'bear'] as const;
 const PRICES: PriceTable = { '': { inputPerMtok: 1, outputPerMtok: 2 } };
 
@@ -209,13 +211,14 @@ function episodeArgs(
   stratum: 'R' | 'H',
   prepFile: string,
   episodeDir: string,
+  cfgOverride?: ReturnType<typeof ConfigSchema.parse>,
 ): EpisodeArgs {
   return {
     day,
     stratum,
     prepFile,
     resultFile: path.join(episodeDir, 'episode-result.json'),
-    cfg: CFG,
+    cfg: cfgOverride ?? CFG,
     haltPolicy: 'auto-resume',
     equityStart: 50_000,
     cacheDir: CACHE_DIR,
@@ -402,6 +405,23 @@ describe('episode 1: fills, judge exit, and the D+1 17:05 episode boundary', () 
       fs.readFileSync(path.join(DIR1, 'episode-result.json'), 'utf8'),
     ) as EpisodeResult;
     expect(onDisk).toEqual(result1);
+  });
+
+  it('deterministic stop fires before the judge when loss exceeds max_position_loss_pct', async () => {
+    // Same LONGA setup (entry 50.05, exit tape at 45 = -10.1%) but with the
+    // default 8% stop: the stop must exit, bypassing the judge, so the exit
+    // reason is the stop string, not the judge's invalidation text.
+    const stopDir = path.join(ROOT, 'ep1-stop');
+    fs.mkdirSync(stopDir, { recursive: true });
+    const stopCfg = ConfigSchema.parse({ max_position_loss_pct: 8 });
+    const res = await runInProcess(
+      stopDir,
+      episodeArgs(EP1.day, 'H', prep1, stopDir, stopCfg),
+      ep1Stub(),
+    );
+    expect(res.trades).toHaveLength(1);
+    expect(res.trades[0]!.exitReason).toContain('stop: unrealized loss');
+    expect(res.trades[0]!.exitReason).toContain('max_position_loss_pct 8%');
   });
 
   it('applies the production narrative merge and writes both thesis files', () => {
