@@ -64,7 +64,18 @@ min_position_notional_usd` (skip reason `below min position`); then truncate to
 `max_open_names`, keeping the highest-conviction survivors (overflow → skip
 reason `over max_open_names`). Kills whole-share quantization dust and capital
 fragmentation. Caps the **thesis plan**, not live cross-day concurrency (that is
-item 4). Config: `min_position_notional_usd` (250), `max_open_names` (5).
+item 4). Config: `min_position_notional_usd` (250), `max_open_names` (3).
+
+**Default coherence (from review):** `max_open_names` must satisfy
+`max_open_names × max_position_pct ≤ max_gross_exposure_pct`, else the gross
+backstop (item 4) binds first and the name cap is dead. Shipped coherent:
+3 × 5% = 15% = `max_gross_exposure_pct`. **Small-account caveat:** the sizing
+base is `min(max_order_notional_usd, equity × max_position_pct)`; at equity
+below ~$5k the 5%-of-equity base shrinks so `base × conviction` can fall under
+the $250 floor and silently drop the marginal low-conviction entries the paper
+soak needs to accumulate ≥50 trades — lower `min_position_notional_usd`
+proportionally for small accounts. Confirm the actual paper/live equity before
+relying on the defaults.
 - Tests: sub-floor dropped with reason; count ≤ cap; the retained set is the
   top-conviction names; ordering preserved.
 

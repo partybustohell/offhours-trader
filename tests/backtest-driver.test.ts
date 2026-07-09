@@ -522,7 +522,11 @@ describe('episode 3: risk-gate rejection and the borrow hard gate', () => {
   it('records the daily-deploy rejection and the not-shortable rejection', async () => {
     const result = await runInProcess(
       DIR3,
-      episodeArgs(EP3.day, 'R', prep3, DIR3),
+      // This fixture predates the max_open_names cap and needs all 4 candidates
+      // (3 longs to trip the deploy cap + 1 not-shortable short for the borrow
+      // gate) to flow, so it opts out of the concentration cap. The cap itself
+      // is covered in tests/synthesis.test.ts.
+      episodeArgs(EP3.day, 'R', prep3, DIR3, ConfigSchema.parse({ max_position_loss_pct: 50, max_open_names: 5 })),
       makeStub({ narratives: 'throw' }), // exercises the production fallback merge path
     );
 

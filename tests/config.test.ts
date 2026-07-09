@@ -62,7 +62,8 @@ describe('ConfigSchema defaults', () => {
     // quant P0 knobs
     expect(cfg.deploy_priority).toBe('conviction');
     expect(cfg.min_position_notional_usd).toBe(250);
-    expect(cfg.max_open_names).toBe(5);
+    expect(cfg.max_open_names).toBe(3); // coherent with 15% gross / 5% per-position
+
     expect(cfg.max_gross_exposure_pct).toBe(15);
     expect(cfg.max_net_exposure_pct).toBe(12);
     expect(cfg.min_trades_for_economic_claim).toBe(50);

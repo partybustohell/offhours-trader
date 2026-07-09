@@ -46,12 +46,18 @@ export const ConfigSchema = z.object({
   deploy_priority: z.enum(['conviction', 'conviction_per_risk']).default('conviction'),
   // A funded position must clear this dollar floor, else it is dropped in
   // synthesis. Below it, whole-share rounding turns the target into 1-share
-  // dust and quantization error dominates the intended sizing.
+  // dust and quantization error dominates the intended sizing. NOTE: sizing
+  // base = min(max_order_notional_usd, equity*max_position_pct); at small
+  // equity (< ~$5k) base*conviction can fall below this floor and SILENTLY
+  // drop marginal entries — lower this proportionally for small accounts.
   min_position_notional_usd: z.number().min(0).default(250),
   // Cap on the number of entries a single thesis emits, applied AFTER the
   // conviction-priority sort so the best names survive. Concentrates the thin
   // book instead of fragmenting the deploy budget across many tiny positions.
-  max_open_names: z.number().int().min(1).max(50).default(5),
+  // Keep coherent with the gross cap: max_open_names * max_position_pct should
+  // be <= max_gross_exposure_pct, else the gross backstop binds first and this
+  // cap is dead (default 3 * 5% = 15% = max_gross_exposure_pct).
+  max_open_names: z.number().int().min(1).max(50).default(3),
   // Entries-only intraday timing blackout (wall-clock; feed-independent).
   // Avoids the RTH open/close vol+spread spikes and the deep-premarket /
   // late-afterhours liquidity vacuum. Exits are NEVER subject to this.

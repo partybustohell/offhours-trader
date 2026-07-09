@@ -29,9 +29,17 @@ max_daily_deploy_pct: 10
 # The executor funds thesis entries in array order until the deploy cap binds,
 # so ordering decides which names get funded first.
 deploy_priority: conviction    # conviction | conviction_per_risk (÷ realized vol)
-min_position_notional_usd: 250 # drop sub-floor positions (whole-share dust)
-max_open_names: 5              # cap entries per thesis, best-conviction first
-# Cross-day exposure backstop (entries only), above the per-day deploy cap.
+min_position_notional_usd: 250 # drop sub-floor positions (whole-share dust).
+                               # NOTE: sizing base = min(order cap, equity·pos%);
+                               # at equity < ~$5k this floor silently drops
+                               # marginal entries — lower it for small accounts.
+max_open_names: 3              # cap entries per thesis, best-conviction first.
+                               # Kept coherent: 3 × max_position_pct 5% = 15% =
+                               # max_gross_exposure_pct, so the name cap is
+                               # actually reachable (not shadowed by gross).
+# Cross-day exposure backstops (entries only), above the per-day deploy cap.
+# gross = total book ceiling (= max_open_names full-size names); net is a
+# tighter DIRECTIONAL cap that trims an extreme one-sided full-size book.
 max_gross_exposure_pct: 15
 max_net_exposure_pct: 12
 # Entries-only intraday timing blackout (wall-clock; feed-independent; exits
