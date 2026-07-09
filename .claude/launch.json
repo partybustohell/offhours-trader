@@ -6,6 +6,7 @@
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["serve"],
       "port": 4310,
+      "autoPort": true,
       "cwd": "/Users/shivbrahmbhatt/offhours-trader"
     }
   ]

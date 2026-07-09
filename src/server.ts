@@ -10,7 +10,7 @@ import { readHaltState, writeHalt, clearHalt } from './state.js';
 import { candidatesPath, verdictsPath, thesisPath, readJsonIfExists } from './paths.js';
 import { AlpacaBroker } from './broker/client.js';
 
-const PORT = 4310;
+const PORT = Number(process.env.PORT) || 4310;
 const ROOT = process.cwd();
 
 function errorMessage(err: unknown): string {
