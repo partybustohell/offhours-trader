@@ -120,6 +120,7 @@ export class SimLedger implements BrokerClient {
   private readonly fillLog: FillEvent[] = [];
   private currentQuotes = new Map<string, StoredQuote>();
   private currentLasts = new Map<string, number>();
+  private currentTickIso = '';
   private news: NewsItem[] = [];
   private halt: HaltState = { halted: false, reason: '', at: '' };
   private closeBaselineEquity: number;
@@ -220,7 +221,11 @@ export class SimLedger implements BrokerClient {
     quotesByTicker: ReadonlyMap<string, StoredQuote>,
     lastByTicker: ReadonlyMap<string, number>,
   ): void {
-    void tickIso; // documentation of intent; quotes carry their own asOf
+    // The sim uses the latest quote <= tick as THE price at the tick (band
+    // checks, fills). Stamp asOf at the tick so it reads as tick-fresh to the
+    // executor's staleness guard, consistent with that existing treatment;
+    // the guard is a live-only safety, unit-tested separately.
+    this.currentTickIso = tickIso;
     this.currentQuotes = new Map();
     this.currentLasts = new Map();
     for (const [ticker, quote] of quotesByTicker) {
@@ -264,7 +269,7 @@ export class SimLedger implements BrokerClient {
         askSize: quote.as,
         // missing trade -> last 0, which fails the executor band check
         last: this.currentLasts.get(ticker) ?? 0,
-        asOf: quote.t,
+        asOf: this.currentTickIso || quote.t,
       });
     }
     return out;

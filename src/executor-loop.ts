@@ -66,6 +66,29 @@ function loadUnexpiredThesis(ymd: string, now: Date): Thesis | null {
  * filled portion. Side is deliberately NOT the discriminator: short entries
  * are sells and must consume the budget; buy-side covers must not.
  */
+/**
+ * Split quotes into fresh vs stale relative to the tick clock. A quote with a
+ * missing or unparseable timestamp is stale by definition (fail closed).
+ */
+export function partitionFreshQuotes(
+  quotes: QuoteSnapshot[],
+  nowMs: number,
+  maxAgeSec: number,
+): { fresh: QuoteSnapshot[]; stale: number } {
+  const maxAgeMs = maxAgeSec * 1000;
+  const fresh: QuoteSnapshot[] = [];
+  let stale = 0;
+  for (const q of quotes) {
+    const asOfMs = Date.parse(q.asOf);
+    if (Number.isFinite(asOfMs) && nowMs - asOfMs <= maxAgeMs && nowMs - asOfMs >= -maxAgeMs) {
+      fresh.push(q);
+    } else {
+      stale++;
+    }
+  }
+  return { fresh, stale };
+}
+
 export function seedDeployedTodayUsd(todayOrders: { clientOrderId?: string; status: string; qty: number; filledQty?: number; limitPrice: number }[]): number {
   return todayOrders
     .filter((o) => o.clientOrderId?.startsWith('entry-'))
@@ -107,7 +130,8 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
     throw new Error('ANTHROPIC_API_KEY is not set; add it to .env');
   }
   const broker = deps.broker ?? new AlpacaBroker(cfg);
-  const md = deps.marketData ?? new AlpacaMarketData();
+  const md =
+    deps.marketData ?? new AlpacaMarketData(process.env, globalThis.fetch, undefined, cfg.data_feed);
 
   let halt = readHaltState();
   const [account, initialOpenOrders, dailyPl, todayOrders] = await Promise.all([
@@ -144,7 +168,18 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
     tickers.length > 0 ? md.getLatestQuotes(tickers) : Promise.resolve([] as QuoteSnapshot[]),
     tickers.length > 0 ? md.getNews(50, tickers) : Promise.resolve([] as NewsItem[]),
   ]);
-  const quoteByTicker = new Map(quotes.map((q) => [q.ticker.toUpperCase(), q]));
+  // Staleness guard (fail closed): drop any quote older than max_quote_age_sec
+  // relative to the tick clock. Dropped quotes fall through the existing "no
+  // quote" skip, so the executor never trades on a stale book — this is what
+  // makes the free IEX feed SAFE to run in the deep off-hours it cannot see.
+  const { fresh, stale } = partitionFreshQuotes(quotes, now.getTime(), cfg.max_quote_age_sec);
+  if (stale > 0) {
+    appendAudit({
+      kind: 'tick',
+      data: { stage: 'stale_quotes', session, dropped: stale, feed: cfg.data_feed },
+    });
+  }
+  const quoteByTicker = new Map(fresh.map((q) => [q.ticker.toUpperCase(), q]));
   const generatedAtMs = new Date(thesis.generatedAt).getTime();
   const freshNews = allNews.filter((n) => new Date(n.created_at).getTime() > generatedAtMs);
   const headlinesFor = (ticker: string): NewsItem[] =>

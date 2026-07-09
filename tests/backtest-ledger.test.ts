@@ -351,7 +351,9 @@ describe('marketdata facade', () => {
         bidSize: 3,
         askSize: 2,
         last: 100.1,
-        asOf: iso(D, '16:59:30'),
+        // asOf is stamped at the tick, not the underlying quote timestamp, so
+        // the executor's staleness guard reads sim quotes as tick-fresh.
+        asOf: iso(D, '17:00:00'),
       },
     ]);
     // quote but no trade in the window -> last 0 (fails the band check downstream)

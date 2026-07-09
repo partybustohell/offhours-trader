@@ -71,12 +71,14 @@ export class AlpacaMarketData {
   private readonly headers: Record<string, string>;
   private readonly fetchFn: FetchFn;
   private readonly sleep: SleepFn;
+  private readonly quoteFeed: 'iex' | 'sip';
 
   // Market data works with paper keys in every mode, including live.
   constructor(
     env: NodeJS.ProcessEnv = process.env,
     fetchFn: FetchFn = globalThis.fetch,
     sleep: SleepFn = defaultSleep,
+    quoteFeed: 'iex' | 'sip' = 'iex',
   ) {
     const key = env.ALPACA_PAPER_KEY;
     const secret = env.ALPACA_PAPER_SECRET;
@@ -86,6 +88,7 @@ export class AlpacaMarketData {
     this.headers = { 'APCA-API-KEY-ID': key, 'APCA-API-SECRET-KEY': secret };
     this.fetchFn = fetchFn;
     this.sleep = sleep;
+    this.quoteFeed = quoteFeed;
   }
 
   private request(path: string): Promise<unknown> {
@@ -161,7 +164,7 @@ export class AlpacaMarketData {
 
   async getLatestQuotes(symbols: string[]): Promise<QuoteSnapshot[]> {
     if (symbols.length === 0) return [];
-    const params = new URLSearchParams({ symbols: symbols.join(','), feed: 'iex' });
+    const params = new URLSearchParams({ symbols: symbols.join(','), feed: this.quoteFeed });
     const [quotesRaw, tradesRaw] = await Promise.all([
       this.request(`/v2/stocks/quotes/latest?${params.toString()}`),
       this.request(`/v2/stocks/trades/latest?${params.toString()}`),
@@ -181,7 +184,9 @@ export class AlpacaMarketData {
         askSize: quote.as ?? 0,
         // Missing trade -> last 0, which fails the executor's band check (do nothing).
         last: trade?.p ?? 0,
-        asOf: quote.t ?? new Date().toISOString(),
+        // A missing timestamp must read as STALE (empty), never forged to "now"
+        // — the staleness guard depends on this to fail closed.
+        asOf: quote.t ?? '',
       });
     }
     return out;

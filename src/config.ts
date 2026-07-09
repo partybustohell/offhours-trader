@@ -45,6 +45,15 @@ export const ConfigSchema = z.object({
   max_position_loss_pct: z.number().positive().default(8),
   max_order_notional_usd: z.number().positive().default(2000),
   max_spread_bps: z.number().positive().default(50),
+  // Quote source. 'iex' is the free tier and is BLIND during deep off-hours
+  // (IEX trades 08:00-17:00 ET only); the staleness guard then makes the
+  // executor safely abstain 17:00-20:00 and 04:00-08:00. 'sip' (paid
+  // real-time subscription) sees the consolidated extended-hours book and is
+  // required to actually trade the deep off-hours.
+  data_feed: z.enum(['iex', 'sip']).default('iex'),
+  // Fail-closed staleness guard: a quote older than this (vs the tick clock)
+  // is treated as no quote, so the executor never trades on a stale book.
+  max_quote_age_sec: z.number().positive().default(120),
   max_chase_pct: z.number().positive().default(1),
   max_drop_pct: z.number().positive().default(3),
   daily_loss_halt_pct: z.number().positive().default(3),

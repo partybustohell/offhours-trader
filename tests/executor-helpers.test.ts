@@ -1,5 +1,45 @@
 import { describe, expect, it } from 'vitest';
-import { entryLimitPrice, seedDeployedTodayUsd } from '../src/executor-loop.js';
+import {
+  entryLimitPrice,
+  partitionFreshQuotes,
+  seedDeployedTodayUsd,
+} from '../src/executor-loop.js';
+import type { QuoteSnapshot } from '../src/types.js';
+
+describe('partitionFreshQuotes (staleness guard)', () => {
+  const now = Date.parse('2026-07-09T21:30:00Z');
+  const q = (asOf: string): QuoteSnapshot => ({
+    ticker: 'X',
+    bid: 10,
+    ask: 10.02,
+    bidSize: 1,
+    askSize: 1,
+    last: 10.01,
+    asOf,
+  });
+
+  it('keeps a quote within the age window', () => {
+    const r = partitionFreshQuotes([q('2026-07-09T21:29:00Z')], now, 120); // 60s old
+    expect(r.fresh).toHaveLength(1);
+    expect(r.stale).toBe(0);
+  });
+
+  it('drops a quote older than the window (the IEX deep-off-hours case)', () => {
+    const r = partitionFreshQuotes([q('2026-07-09T17:00:00Z')], now, 120); // hours old
+    expect(r.fresh).toHaveLength(0);
+    expect(r.stale).toBe(1);
+  });
+
+  it('treats a missing/empty timestamp as stale — never forged fresh', () => {
+    expect(partitionFreshQuotes([q('')], now, 120).stale).toBe(1);
+    expect(partitionFreshQuotes([q('not-a-date')], now, 120).stale).toBe(1);
+  });
+
+  it('drops a future-dated quote beyond tolerance', () => {
+    const r = partitionFreshQuotes([q('2026-07-09T22:00:00Z')], now, 120); // 30min ahead
+    expect(r.stale).toBe(1);
+  });
+});
 
 describe('seedDeployedTodayUsd', () => {
   const order = (over: Partial<Parameters<typeof seedDeployedTodayUsd>[0][number]>) => ({
