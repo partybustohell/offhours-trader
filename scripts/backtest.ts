@@ -477,17 +477,23 @@ export async function sweepCommand(
   budgetOnly = false,
   signalThreshold = 0.55,
   feedOverride?: 'iex' | 'sip',
+  noBlackout = false,
 ): Promise<void> {
   const sample = loadSample();
   // The backtest exercises the OFF-HOURS thesis (traded during premarket/
   // afterhours), so enable those sessions regardless of the live config's
   // operational toggle — else the executor no-ops and nothing places. Feed
   // override (does NOT touch config.yaml): IEX is too thin to fill this window,
-  // so a signal sweep needs SIP for a trading baseline.
+  // so a signal sweep needs SIP for a trading baseline. --no-blackout relaxes
+  // the entry-timing gate so entries can place in the thin off-hours ticks
+  // where the historical SIP fills are (else the baseline never trades).
   const cfg: Config = {
     ...loadConfig(),
     ...(feedOverride ? { data_feed: feedOverride } : {}),
     sessions: { premarket: true, afterhours: true, regularhours: true },
+    ...(noBlackout
+      ? { entry_blackout: { rth_open_min: 0, rth_close_min: 0, premarket_start_hm: '04:00', afterhours_end_hm: '20:00' } }
+      : {}),
   };
   const episodes = sample.episodes.filter((e) => fileExists(prepPath(e.day)));
   if (episodes.length === 0) throw new Error('no prep files found — run precompute first');
@@ -749,6 +755,7 @@ async function main(): Promise<void> {
       hasFlag('budget-only'),
       numFlag('threshold') ?? 0.55,
       flagValue('feed') === 'sip' ? 'sip' : flagValue('feed') === 'iex' ? 'iex' : undefined,
+      hasFlag('no-blackout'),
     );
     return;
   }
