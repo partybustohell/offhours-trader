@@ -144,9 +144,14 @@ a {
    ========================================================================== */
 
 .app {
-  height: 100%;
+  height: 100dvh;
   display: grid;
   grid-template-columns: var(--rail-w) 1fr;
+  /* Definite row so grid items (rail, stage) resolve height:100% against the
+     viewport, not their content — without this the stage grows to content
+     height and body{overflow:hidden} clips it, making the page unscrollable.
+     minmax(0,…) lets the inner overflow:auto regions actually scroll. */
+  grid-template-rows: minmax(0, 1fr);
 }
 
 /* ---- left nav rail ---- */
@@ -371,6 +376,11 @@ a {
   font-size: 11px;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
+}
+.tel-countdown {
+  color: var(--amber);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
 }
 
 .live-dot {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type {
   AuditEvent,
   BacktestResponse,
@@ -218,6 +218,36 @@ function Telemetry({
     return () => clearInterval(t);
   }, []);
 
+  // Countdown to the next executor tick: the interval from config, anchored to
+  // the most recent tick in the audit so it tracks the real launchd cadence.
+  const intervalMin = data.config?.executor_interval_min ?? 15;
+  const lastTickMs = useMemo(() => {
+    let m = 0;
+    for (const e of data.audit) {
+      if (e.kind === 'tick') {
+        const t = Date.parse(e.ts);
+        if (Number.isFinite(t) && t > m) m = t;
+      }
+    }
+    return m || null;
+  }, [data.audit]);
+  const [nextTick, setNextTick] = useState('—');
+  useEffect(() => {
+    const upd = () => {
+      if (!lastTickMs) return setNextTick('—');
+      const intervalMs = intervalMin * 60_000;
+      const now = Date.now();
+      const next = lastTickMs + Math.ceil(Math.max(1, now - lastTickMs) / intervalMs) * intervalMs;
+      const rem = Math.max(0, next - now);
+      const mm = Math.floor(rem / 60_000);
+      const ss = Math.floor((rem % 60_000) / 1000);
+      setNextTick(`${mm}:${String(ss).padStart(2, '0')}`);
+    };
+    upd();
+    const t = setInterval(upd, 1000);
+    return () => clearInterval(t);
+  }, [lastTickMs, intervalMin]);
+
   const st = data.status;
   const mode = st?.mode ?? 'paper';
   const equity = st?.equity;
@@ -257,6 +287,12 @@ function Telemetry({
         <span className="label">Halt</span>
         <span className="tel-val" style={{ color: halted ? 'var(--red)' : 'var(--muted)' }}>
           {halted ? 'HALTED' : 'clear'}
+        </span>
+      </div>
+      <div className="tel-cell">
+        <span className="label">Next tick</span>
+        <span className="tel-val tel-countdown" title={`executor runs every ${intervalMin} min`}>
+          {nextTick}
         </span>
       </div>
       <div className="tel-cell tel-spacer">
