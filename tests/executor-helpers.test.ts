@@ -2,9 +2,25 @@ import { describe, expect, it } from 'vitest';
 import {
   entryLimitPrice,
   partitionFreshQuotes,
+  positionLossPct,
   seedDeployedTodayUsd,
 } from '../src/executor-loop.js';
 import type { QuoteSnapshot } from '../src/types.js';
+
+describe('positionLossPct (universal hard-stop input)', () => {
+  it('marks a long at the bid: down 10% is a +10% loss, up is negative', () => {
+    expect(positionLossPct({ side: 'long', avgEntryPrice: 100 }, { bid: 90, ask: 90.1 })).toBeCloseTo(10, 10);
+    expect(positionLossPct({ side: 'long', avgEntryPrice: 100 }, { bid: 110, ask: 110.1 })).toBeCloseTo(-10, 10);
+  });
+  it('marks a short at the ask: price up 8% is a +8% loss', () => {
+    expect(positionLossPct({ side: 'short', avgEntryPrice: 100 }, { bid: 107.9, ask: 108 })).toBeCloseTo(8, 10);
+    expect(positionLossPct({ side: 'short', avgEntryPrice: 100 }, { bid: 92, ask: 92.1 })).toBeCloseTo(-7.9, 10);
+  });
+  it('returns 0 when avgEntryPrice is non-positive (no basis)', () => {
+    expect(positionLossPct({ side: 'long', avgEntryPrice: 0 }, { bid: 90, ask: 90.1 })).toBe(0);
+    expect(positionLossPct({ side: 'long', avgEntryPrice: -5 }, { bid: 90, ask: 90.1 })).toBe(0);
+  });
+});
 
 describe('entryLimitPrice — semi-passive aggressiveness', () => {
   const quote = { bid: 100, ask: 100.1 };

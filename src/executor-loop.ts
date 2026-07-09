@@ -123,6 +123,25 @@ export function entryLimitPrice(
   return Math.ceil(Math.max(target, band.low) * 100) / 100;
 }
 
+/**
+ * Unrealized loss on a position as a positive percentage (a gain is negative),
+ * marked conservatively at the exit-side quote (long -> bid, short -> ask).
+ * avgEntryPrice <= 0 -> 0 (no basis to measure against). Pure.
+ */
+export function positionLossPct(
+  position: { side: 'long' | 'short'; avgEntryPrice: number },
+  quote: { bid: number; ask: number },
+): number {
+  if (!(position.avgEntryPrice > 0)) return 0;
+  const isLong = position.side === 'long';
+  const mark = isLong ? quote.bid : quote.ask;
+  return (
+    (isLong
+      ? (position.avgEntryPrice - mark) / position.avgEntryPrice
+      : (mark - position.avgEntryPrice) / position.avgEntryPrice) * 100
+  );
+}
+
 export async function runTick(deps: TickDeps = {}): Promise<void> {
   const now = deps.now ?? new Date();
   const cfg = deps.cfg ?? loadConfig();
@@ -283,29 +302,22 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
   for (const position of account.positions) {
     const ticker = position.ticker.toUpperCase();
     const entry = exitEntryFor(ticker);
-    if (!entry) {
-      appendAudit({
-        kind: 'tick',
-        data: { stage: 'orphan_position', ticker, note: 'no thesis entry found; not monitored' },
-      });
-      continue;
-    }
     const quote = quoteByTicker.get(ticker);
+    // The hard per-position stop applies to EVERY open position — a loss limit
+    // is risk management, not a judgment call. A position with no thesis entry
+    // (e.g. a seeded starter basket) is still stop-protected; it just cannot be
+    // judged (no invalidation conditions), so only the deterministic stop runs.
     if (!quote) {
-      skip(ticker, 'no quote for exit check');
+      if (entry) skip(ticker, 'no quote for exit check');
+      else
+        appendAudit({
+          kind: 'tick',
+          data: { stage: 'orphan_position', ticker, note: 'no quote; stop-only monitoring' },
+        });
       continue;
     }
     const isLong = position.side === 'long';
-    // Deterministic per-position stop, evaluated BEFORE the judge: a hard
-    // loss limit is risk management, not a judgment call. A stopped position
-    // skips the LLM entirely.
-    const mark = isLong ? quote.bid : quote.ask;
-    const lossPct =
-      position.avgEntryPrice > 0
-        ? (isLong
-            ? (position.avgEntryPrice - mark) / position.avgEntryPrice
-            : (mark - position.avgEntryPrice) / position.avgEntryPrice) * 100
-        : 0;
+    const lossPct = positionLossPct(position, quote);
     const stopHit = lossPct >= cfg.max_position_loss_pct;
 
     let exitReasons: string[] | null = null;
@@ -313,21 +325,28 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
       exitReasons = [
         `stop: unrealized loss ${lossPct.toFixed(1)}% >= max_position_loss_pct ${cfg.max_position_loss_pct}%`,
       ];
-    } else {
+    } else if (entry) {
       const decision = await judgeTick(
         cfg,
         { entry, quote, headlines: headlinesFor(ticker), position },
         deps.llm,
       );
       if (decision.exitPosition) exitReasons = decision.reasons;
+    } else {
+      // Orphan below its stop: monitored for the stop only, no judge.
+      appendAudit({
+        kind: 'tick',
+        data: { stage: 'orphan_position', ticker, note: 'stop-only monitoring; no thesis entry to judge' },
+      });
+      continue;
     }
     if (!exitReasons) continue;
-    appendAudit({ kind: 'exit', data: { ticker, reasons: exitReasons, stop: stopHit } });
+    appendAudit({ kind: 'exit', data: { ticker, reasons: exitReasons, stop: stopHit, orphan: !entry } });
     // Cancel any resting order for this ticker first — notably an RTH stop-loss
     // leg — so the exit doesn't race a still-live protective order.
     await broker.cancelOrdersFor(ticker);
     const order: ProposedOrder = {
-      ticker: entry.ticker,
+      ticker: position.ticker,
       side: isLong ? 'sell' : 'buy',
       qty: Math.abs(position.qty),
       // marketable exit limit, cent-rounded toward the passive side

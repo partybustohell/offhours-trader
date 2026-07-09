@@ -33,15 +33,17 @@ min_position_notional_usd: 250 # drop sub-floor positions (whole-share dust).
                                # NOTE: sizing base = min(order cap, equity·pos%);
                                # at equity < ~$5k this floor silently drops
                                # marginal entries — lower it for small accounts.
-max_open_names: 3              # cap entries per thesis, best-conviction first.
-                               # Kept coherent: 3 × max_position_pct 5% = 15% =
+max_open_names: 5              # cap entries per thesis, best-conviction first.
+                               # Raised to 5 for the seeded starter basket.
+                               # Coherent: 5 × max_position_pct 5% = 25% =
                                # max_gross_exposure_pct, so the name cap is
                                # actually reachable (not shadowed by gross).
 # Cross-day exposure backstops (entries only), above the per-day deploy cap.
-# gross = total book ceiling (= max_open_names full-size names); net is a
-# tighter DIRECTIONAL cap that trims an extreme one-sided full-size book.
-max_gross_exposure_pct: 15
-max_net_exposure_pct: 12
+# gross = total book ceiling (= max_open_names full-size names). Raised to hold
+# the ~$20k (20% of equity) starter basket with a little headroom; net == gross
+# so an all-long basket isn't blocked by a tighter directional cap.
+max_gross_exposure_pct: 25
+max_net_exposure_pct: 25
 # Entries-only intraday timing blackout (wall-clock; feed-independent; exits
 # are never gated). Avoids the RTH open/close spikes and the deep-premarket /
 # late-afterhours liquidity vacuum.
