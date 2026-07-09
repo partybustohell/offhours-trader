@@ -474,6 +474,7 @@ export async function sweepCommand(
   concurrency = 4,
   offline = false,
   mode: 'threshold' | 'signals' = 'threshold',
+  budgetOnly = false,
 ): Promise<void> {
   const sample = loadSample();
   const cfg = loadConfig();
@@ -531,6 +532,20 @@ export async function sweepCommand(
       process.exitCode = 1;
       return;
     }
+  }
+  // Signal mode shares cached LLM inputs across cells, so fresh calls should be
+  // ~baseline; if they aren't, abort rather than make unbudgeted live API calls.
+  if (budgetTotal > SWEEP_BUDGET_LIMIT && mode === 'signals') {
+    console.error(
+      `signal-sweep fresh-call budget ${budgetTotal} exceeds ${SWEEP_BUDGET_LIMIT} — aborting to avoid ` +
+        `unbudgeted live API calls. Populate the cache (run the baseline config first) or cut episodes.`,
+    );
+    process.exitCode = 1;
+    return;
+  }
+  if (budgetOnly) {
+    log(`budget-only: stopping before the priced run (fresh calls = ${budgetTotal}).`);
+    return;
   }
 
   // Real pass: Phase B per cell through the shared canonical judge cache.
@@ -715,7 +730,13 @@ async function main(): Promise<void> {
   if (cmd === 'sweep') {
     const tag = flagValue('tag');
     if (!tag) throw new Error('usage: backtest.ts sweep --tag T');
-    await sweepCommand(tag, numFlag('concurrency') ?? 4, hasFlag('offline'), hasFlag('signals') ? 'signals' : 'threshold');
+    await sweepCommand(
+      tag,
+      numFlag('concurrency') ?? 4,
+      hasFlag('offline'),
+      hasFlag('signals') ? 'signals' : 'threshold',
+      hasFlag('budget-only'),
+    );
     return;
   }
   if (cmd === 'report') {
