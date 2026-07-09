@@ -23,6 +23,26 @@ This is on the critical path for both live money *and* a meaningful paper soak.
 Everything below works on the free feed, but understand you are testing the
 plumbing, not the strategy, until SIP is on.
 
+## Regular-hours (RTH) trading — works on the free feed
+
+The system can also trade the regular session (09:30–16:00 ET). This is a
+distinct product from off-hours and, crucially, **it works on the free IEX
+feed** — IEX has live quotes 09:30–16:00, so no SIP subscription is needed to
+trade or soak during regular hours.
+
+Enable it in `config.yaml`: `sessions.regularhours: true`. Then:
+
+- A **morning pipeline** (`pnpm pipeline rth`, scheduled 09:00 ET) builds a
+  fresh RTH thesis from overnight/pre-market news and the prior close, written
+  to `out/thesis-<date>-rth.json` and expiring at that day's 16:00 close.
+- The executor trades it during 09:30–16:00 with `extended_hours=false`.
+- Each RTH entry carries a **native Alpaca stop-loss** (OTO order) at
+  `max_position_loss_pct` — real, continuous protection between ticks, which
+  extended-hours orders cannot have.
+
+The off-hours evening thesis and the RTH morning thesis coexist (different
+files); the executor picks the right one for the current session automatically.
+
 ## Modes (config.yaml `mode`)
 
 Progress through these in order; do not skip.

@@ -59,6 +59,7 @@ function order(over: Partial<ProposedOrder> = {}): ProposedOrder {
   return {
     ticker: 'NVDA',
     side: 'buy',
+    extendedHours: true,
     qty: 10,
     limitPrice: 100,
     intent: 'entry',

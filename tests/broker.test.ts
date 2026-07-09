@@ -46,6 +46,7 @@ const proposed: ProposedOrder = {
   side: 'buy',
   qty: 10,
   limitPrice: 123.45,
+  extendedHours: true,
   intent: 'entry',
   reason: 'test',
 };
@@ -144,6 +145,25 @@ describe('AlpacaBroker.placeLimitOrder', () => {
     const broker = new AlpacaBroker(paperCfg, paperEnv, fetchFn, noSleep);
     const placed = await broker.placeLimitOrder(proposed);
     expect(placed.id).toBe('ord-original');
+  });
+
+  it('sends extended_hours=false and attaches an OTO stop-loss for an RTH entry', async () => {
+    const { fetchFn, calls } = makeFetch([{ status: 200, json: alpacaOrderJson }]);
+    const broker = new AlpacaBroker(paperCfg, paperEnv, fetchFn, noSleep);
+    await broker.placeLimitOrder({ ...proposed, extendedHours: false, stopLoss: 95.12 });
+    const body = JSON.parse(String(calls[0]!.init?.body));
+    expect(body.extended_hours).toBe(false);
+    expect(body.order_class).toBe('oto');
+    expect(body.stop_loss).toEqual({ stop_price: '95.12' });
+  });
+
+  it('does not attach a stop-loss to an extended-hours order even if one is passed', async () => {
+    const { fetchFn, calls } = makeFetch([{ status: 200, json: alpacaOrderJson }]);
+    const broker = new AlpacaBroker(paperCfg, paperEnv, fetchFn, noSleep);
+    await broker.placeLimitOrder({ ...proposed, extendedHours: true, stopLoss: 95 });
+    const body = JSON.parse(String(calls[0]!.init?.body));
+    expect(body.order_class).toBeUndefined();
+    expect(body.stop_loss).toBeUndefined();
   });
 
   it('dry-run makes zero fetch calls and returns a synthetic dry_run order', async () => {

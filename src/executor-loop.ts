@@ -2,7 +2,7 @@ import 'dotenv/config';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import type { ProposedOrder, QuoteSnapshot, Thesis } from './types.js';
+import type { ProposedOrder, QuoteSnapshot, Thesis, ThesisKind } from './types.js';
 import type { Config } from './config.js';
 import { loadConfig } from './config.js';
 import { currentSession, nowET, sessionEnabled } from './clock.js';
@@ -31,14 +31,15 @@ const DAY_MS = 86_400_000;
  * do nothing) rather than silently falling back to an older thesis. Only a
  * genuinely absent file returns null.
  */
-function loadThesisFile(ymd: string): Thesis | null {
+function loadThesisFile(ymd: string, kind: ThesisKind): Thesis | null {
+  const file = thesisPath(ymd, kind);
   let raw: Thesis | null;
   try {
-    raw = readJsonIfExists<Thesis>(thesisPath(ymd));
+    raw = readJsonIfExists<Thesis>(file);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    appendAudit({ kind: 'error', data: { stage: 'thesis_load', file: thesisPath(ymd), message } });
-    throw new Error(`malformed thesis file ${thesisPath(ymd)}: ${message}`);
+    appendAudit({ kind: 'error', data: { stage: 'thesis_load', file, message } });
+    throw new Error(`malformed thesis file ${file}: ${message}`);
   }
   if (!raw) return null;
   if (
@@ -46,14 +47,14 @@ function loadThesisFile(ymd: string): Thesis | null {
     typeof raw.expiresAt !== 'string' ||
     typeof raw.generatedAt !== 'string'
   ) {
-    appendAudit({ kind: 'error', data: { stage: 'thesis_load', file: thesisPath(ymd) } });
-    throw new Error(`malformed thesis file ${thesisPath(ymd)}: invalid shape`);
+    appendAudit({ kind: 'error', data: { stage: 'thesis_load', file } });
+    throw new Error(`malformed thesis file ${file}: invalid shape`);
   }
   return raw;
 }
 
-function loadUnexpiredThesis(ymd: string, now: Date): Thesis | null {
-  const raw = loadThesisFile(ymd);
+function loadUnexpiredThesis(ymd: string, now: Date, kind: ThesisKind): Thesis | null {
+  const raw = loadThesisFile(ymd, kind);
   if (!raw) return null;
   const expires = new Date(raw.expiresAt).getTime();
   if (!Number.isFinite(expires) || expires <= now.getTime()) return null;
@@ -148,9 +149,17 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
 
   const todayYmd = nowET(now).ymd;
   const yesterdayYmd = nowET(new Date(now.getTime() - DAY_MS)).ymd;
-  const thesis = loadUnexpiredThesis(todayYmd, now) ?? loadUnexpiredThesis(yesterdayYmd, now);
+  // The regular session trades its own same-morning thesis; pre/after-market
+  // trade the evening off-hours thesis (today, else yesterday's carry-over).
+  const thesisKind: ThesisKind = session === 'rth' ? 'rth' : 'offhours';
+  const extendedHours = session !== 'rth';
+  const thesis =
+    thesisKind === 'rth'
+      ? loadUnexpiredThesis(todayYmd, now, 'rth')
+      : (loadUnexpiredThesis(todayYmd, now, 'offhours') ??
+        loadUnexpiredThesis(yesterdayYmd, now, 'offhours'));
   if (!thesis) {
-    appendAudit({ kind: 'tick', data: { stage: 'no_thesis', session, action: 'skip' } });
+    appendAudit({ kind: 'tick', data: { stage: 'no_thesis', session, thesisKind, action: 'skip' } });
     return;
   }
 
@@ -217,10 +226,14 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
   const exitEntryFor = (ticker: string) => {
     const active = thesis.entries.find((e) => e.ticker.toUpperCase() === ticker);
     if (active) return active;
+    // A held position may have been opened under either thesis kind (e.g. an
+    // RTH entry now monitored after-hours), so search both.
     for (const ymd of [todayYmd, yesterdayYmd]) {
-      const past = loadThesisFile(ymd);
-      const entry = past?.entries.find((e) => e.ticker.toUpperCase() === ticker);
-      if (entry) return entry;
+      for (const kind of ['offhours', 'rth'] as const) {
+        const past = loadThesisFile(ymd, kind);
+        const entry = past?.entries.find((e) => e.ticker.toUpperCase() === ticker);
+        if (entry) return entry;
+      }
     }
     return undefined;
   };
@@ -269,6 +282,9 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
     }
     if (!exitReasons) continue;
     appendAudit({ kind: 'exit', data: { ticker, reasons: exitReasons, stop: stopHit } });
+    // Cancel any resting order for this ticker first — notably an RTH stop-loss
+    // leg — so the exit doesn't race a still-live protective order.
+    await broker.cancelOrdersFor(ticker);
     const order: ProposedOrder = {
       ticker: entry.ticker,
       side: isLong ? 'sell' : 'buy',
@@ -279,6 +295,7 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
         : Math.ceil(quote.ask * 100) / 100,
       intent: 'exit',
       reason: exitReasons.join('; ') || 'invalidation triggered',
+      extendedHours,
     };
     appendAudit({ kind: 'proposed_order', data: order });
     const risk = riskCheck(order, riskContext());
@@ -333,6 +350,14 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
       skip(ticker, 'target notional below one share');
       continue;
     }
+    // Regular-session entries carry a native broker stop-loss (Alpaca executes
+    // stops in RTH but not extended hours). Long: stop below entry; short: above.
+    const stopLoss =
+      session === 'rth'
+        ? entry.direction === 'long'
+          ? Math.round(limitPrice * (1 - cfg.max_position_loss_pct / 100) * 100) / 100
+          : Math.round(limitPrice * (1 + cfg.max_position_loss_pct / 100) * 100) / 100
+        : undefined;
     const order: ProposedOrder = {
       ticker: entry.ticker,
       side: entry.direction === 'long' ? 'buy' : 'sell',
@@ -340,6 +365,8 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
       limitPrice,
       intent: 'entry',
       reason: decision.reasons.join('; ') || 'thesis entry conditions hold',
+      extendedHours,
+      ...(stopLoss !== undefined ? { stopLoss } : {}),
     };
     appendAudit({ kind: 'proposed_order', data: order });
     const risk = riskCheck(order, riskContext());

@@ -313,6 +313,13 @@ export class SimLedger implements BrokerClient {
     return this.orders.filter((o) => o.status === 'new').map((o) => this.toBrokerOrder(o));
   }
 
+  async cancelOrdersFor(ticker: string): Promise<void> {
+    const t = ticker.toUpperCase();
+    for (const o of this.orders) {
+      if (o.status === 'new' && o.ticker.toUpperCase() === t) o.status = 'canceled';
+    }
+  }
+
   /** Orders submitted since ET midnight of the current sim day. */
   async getTodayOrders(): Promise<BrokerOrder[]> {
     this.sweepExpired();

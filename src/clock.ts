@@ -41,6 +41,7 @@ export function currentSession(d = new Date()): Session {
 export function sessionEnabled(s: Session, cfg: Config): boolean {
   return (
     (s === 'premarket' && cfg.sessions.premarket) ||
-    (s === 'afterhours' && cfg.sessions.afterhours)
+    (s === 'afterhours' && cfg.sessions.afterhours) ||
+    (s === 'rth' && cfg.sessions.regularhours)
   );
 }

@@ -122,6 +122,7 @@ async function main(): Promise<void> {
     });
     const thesis: Thesis = {
       date: ymd,
+      kind: 'offhours',
       generatedAt: new Date().toISOString(),
       expiresAt: thesisExpiry(ymd),
       entries,
@@ -140,6 +141,7 @@ async function main(): Promise<void> {
       getDailyPl: async () => 0,
       getOpenOrders: async () => [],
       getTodayOrders: async () => [],
+      cancelOrdersFor: async (): Promise<void> => {},
       placeLimitOrder: async (o: ProposedOrder): Promise<BrokerOrder> => {
         placed++;
         return {

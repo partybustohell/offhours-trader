@@ -106,6 +106,7 @@ function replayEntryGate(entry: ThesisEntry, quote: QuoteSnapshot, cfg: Config):
       side: entry.direction === 'long' ? 'buy' : 'sell',
       qty,
       limitPrice,
+      extendedHours: true,
       intent: 'entry',
       reason: 'thesis entry conditions hold',
     },
@@ -154,6 +155,7 @@ beforeAll(async () => {
   computed = computeThesisEntries(verdictFile.verdicts, marketInfo, account, cfg);
   thesis = {
     date: DATE,
+    kind: 'offhours',
     generatedAt: '2026-07-07T21:05:00.000Z', // 17:05 ET, fixed
     expiresAt: thesisExpiry(DATE),
     entries: computed.entries.map((e) => ({ ...e, narrative: '' })),
@@ -356,6 +358,7 @@ describe('executor tick replay (dry-run gate math + risk gate)', () => {
       side: 'buy',
       qty: 17,
       limitPrice: 100.1,
+      extendedHours: true,
       intent: 'entry',
       reason: 'thesis entry conditions hold',
     });

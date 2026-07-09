@@ -13,6 +13,7 @@ interface Draft {
   exclude: string[];
   premarket: boolean;
   afterhours: boolean;
+  regularhours: boolean;
   weights: Record<AnalystName, number>;
   conviction_threshold: string;
   quorum: string;
@@ -40,6 +41,7 @@ function toDraft(c: Config): Draft {
     exclude: [...c.universe.exclude],
     premarket: c.sessions.premarket,
     afterhours: c.sessions.afterhours,
+    regularhours: c.sessions.regularhours,
     weights: { ...c.agent_weights },
     conviction_threshold: String(c.conviction_threshold),
     quorum: String(c.quorum),
@@ -72,7 +74,7 @@ function toPayload(d: Draft, c: Config): Record<string, unknown> {
       min_avg_dollar_volume: Number(d.min_avg_dollar_volume),
       exclude: d.exclude,
     },
-    sessions: { premarket: d.premarket, afterhours: d.afterhours },
+    sessions: { premarket: d.premarket, afterhours: d.afterhours, regularhours: d.regularhours },
     agent_weights: d.weights,
     conviction_threshold: Number(d.conviction_threshold),
     quorum: Number(d.quorum),
@@ -271,6 +273,14 @@ export default function ConfigEditor({ config, onSaved }: Props) {
             onChange={(e) => set({ afterhours: e.target.checked })}
           />
           afterhours
+        </label>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={d.regularhours}
+            onChange={(e) => set({ regularhours: e.target.checked })}
+          />
+          regularhours
         </label>
       </div>
 

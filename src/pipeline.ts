@@ -7,7 +7,8 @@ import { nowET } from './clock.js';
 import { appendAudit } from './audit.js';
 import { candidatesPath, thesisPath, verdictsPath, writeJsonAtomic } from './paths.js';
 import { buildCandidates } from './candidates.js';
-import { computeThesisEntries, thesisExpiry } from './synthesis.js';
+import { computeThesisEntries, thesisExpiry, rthThesisExpiry } from './synthesis.js';
+import type { ThesisKind } from './types.js';
 import type { BrokerClient } from './broker/client.js';
 import { AlpacaBroker } from './broker/client.js';
 import { AlpacaMarketData, type NewsItem } from './broker/marketdata.js';
@@ -22,6 +23,7 @@ export interface PipelineDeps {
   broker?: BrokerClient;
   llm?: LlmClient;
   now?: Date;
+  kind?: ThesisKind; // 'offhours' (default, evening) | 'rth' (morning)
 }
 
 function groupNewsBySymbol(news: NewsItem[], tickers: string[]): Map<string, NewsItem[]> {
@@ -43,12 +45,14 @@ export async function runPipeline(deps: PipelineDeps = {}): Promise<Thesis> {
   const now = deps.now ?? new Date();
   const ymd = nowET(now).ymd;
   const cfg = deps.cfg ?? loadConfig();
+  const kind: ThesisKind = deps.kind ?? 'offhours';
+  const expiresAt = kind === 'rth' ? rthThesisExpiry(ymd) : thesisExpiry(ymd);
   if (!deps.llm && !process.env.ANTHROPIC_API_KEY) {
     throw new Error('ANTHROPIC_API_KEY is not set; add it to .env');
   }
   const md = deps.marketData ?? new AlpacaMarketData();
 
-  appendAudit({ kind: 'tick', data: { stage: 'pipeline_start', date: ymd, mode: cfg.mode } });
+  appendAudit({ kind: 'tick', data: { stage: 'pipeline_start', date: ymd, mode: cfg.mode, thesisKind: kind } });
 
   const [movers, mostActives, news] = await Promise.all([
     md.getMovers(),
@@ -93,12 +97,13 @@ export async function runPipeline(deps: PipelineDeps = {}): Promise<Thesis> {
   if (candidateFile.candidates.length === 0) {
     const empty: Thesis = {
       date: ymd,
+      kind,
       generatedAt: now.toISOString(),
-      expiresAt: thesisExpiry(ymd),
+      expiresAt,
       entries: [],
       skipped: [],
     };
-    writeJsonAtomic(thesisPath(ymd), empty);
+    writeJsonAtomic(thesisPath(ymd, kind), empty);
     appendAudit({ kind: 'thesis', data: { date: ymd, entries: [], note: 'no candidates' } });
     return empty;
   }
@@ -138,12 +143,13 @@ export async function runPipeline(deps: PipelineDeps = {}): Promise<Thesis> {
 
   const thesis: Thesis = {
     date: ymd,
+    kind,
     generatedAt: now.toISOString(),
-    expiresAt: thesisExpiry(ymd),
+    expiresAt,
     entries,
     skipped: computed.skipped,
   };
-  writeJsonAtomic(thesisPath(ymd), thesis);
+  writeJsonAtomic(thesisPath(ymd, kind), thesis);
   appendAudit({
     kind: 'thesis',
     data: {
@@ -163,7 +169,10 @@ export async function runPipeline(deps: PipelineDeps = {}): Promise<Thesis> {
 
 export async function main(): Promise<void> {
   try {
-    await runPipeline();
+    const kind: ThesisKind = process.argv.includes('--session=rth') || process.argv.includes('rth')
+      ? 'rth'
+      : 'offhours';
+    await runPipeline({ kind });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error(`pipeline failed: ${message}`);

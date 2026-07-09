@@ -88,4 +88,11 @@ describe('sessionEnabled', () => {
     expect(sessionEnabled('premarket', cfg)).toBe(false);
     expect(sessionEnabled('afterhours', cfg)).toBe(false);
   });
+
+  it('regularhours (rth) is gated by its own toggle', () => {
+    const on = ConfigSchema.parse({ sessions: { regularhours: true } });
+    expect(sessionEnabled('rth', on)).toBe(true);
+    const off = ConfigSchema.parse({ sessions: { regularhours: false } });
+    expect(sessionEnabled('rth', off)).toBe(false);
+  });
 });

@@ -27,6 +27,7 @@ function makeOrder(overrides: Partial<ProposedOrder> = {}): ProposedOrder {
     limitPrice: 100,
     intent: 'entry',
     reason: 'test',
+    extendedHours: true,
     ...overrides,
   };
 }

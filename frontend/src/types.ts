@@ -107,6 +107,7 @@ export interface Config {
   sessions: {
     premarket: boolean;
     afterhours: boolean;
+    regularhours: boolean;
   };
   agent_weights: Record<AnalystName, number>;
   conviction_threshold: number;

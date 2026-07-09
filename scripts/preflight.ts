@@ -63,7 +63,11 @@ async function main(): Promise<void> {
           'Real extended-hours trading requires data_feed=sip (paid real-time subscription).',
       );
     }
-    ok('data_feed=iex can trade only the IEX/session overlap: 08:00-09:30 and 16:00-17:00 ET');
+    if (cfg.sessions.regularhours) {
+      ok('data_feed=iex FULLY covers the regular session 09:30-16:00 — RTH trades on the free feed, no SIP needed');
+    } else if (blind.length === 0) {
+      warn('data_feed=iex but no session it can see is enabled — nothing will trade');
+    }
   } else {
     ok('data_feed=sip: consolidated real-time book available across all enabled sessions');
   }

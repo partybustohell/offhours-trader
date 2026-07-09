@@ -172,6 +172,9 @@ export interface BrokerClient {
   getOpenOrders(): Promise<BrokerOrder[]>;
   getTodayOrders(): Promise<BrokerOrder[]>;
   placeLimitOrder(o: ProposedOrder): Promise<BrokerOrder>;
+  /** Cancel all open orders for a ticker (e.g. a resting RTH stop-loss leg
+   *  before a manual exit). No-op when there are none. */
+  cancelOrdersFor(ticker: string): Promise<void>;
 }
 
 export class AlpacaBroker implements BrokerClient {
@@ -256,7 +259,7 @@ export class AlpacaBroker implements BrokerClient {
         filledQty: 0,
       };
     }
-    const body = {
+    const body: Record<string, unknown> = {
       symbol: o.ticker,
       qty: String(o.qty),
       side: o.side,
@@ -264,9 +267,17 @@ export class AlpacaBroker implements BrokerClient {
       time_in_force: 'day',
       // Alpaca rejects sub-penny limit prices on stocks >= $1 with a 422.
       limit_price: o.limitPrice.toFixed(2),
-      extended_hours: true,
+      extended_hours: o.extendedHours,
       client_order_id: clientOrderId,
     };
+    // Regular-session entries carry a native stop-loss via a one-triggers-other
+    // order: the entry fills, then Alpaca activates the stop. Extended-hours
+    // orders cannot use this (stops do not execute there), so stopLoss is only
+    // ever set on RTH entries.
+    if (o.stopLoss !== undefined && !o.extendedHours) {
+      body.order_class = 'oto';
+      body.stop_loss = { stop_price: o.stopLoss.toFixed(2) };
+    }
     try {
       const raw = await this.request('/v2/orders', {
         method: 'POST',
@@ -285,6 +296,17 @@ export class AlpacaBroker implements BrokerClient {
         return mapOrder(raw as AlpacaOrder);
       }
       throw err;
+    }
+  }
+
+  async cancelOrdersFor(ticker: string): Promise<void> {
+    if (this.mode === 'dry-run') return;
+    const open = await this.getOpenOrders();
+    const mine = open.filter((o) => o.ticker.toUpperCase() === ticker.toUpperCase());
+    for (const o of mine) {
+      await this.request(`/v2/orders/${o.id}`, { method: 'DELETE' }).catch(() => {
+        // already filled/canceled between fetch and delete — ignore
+      });
     }
   }
 }

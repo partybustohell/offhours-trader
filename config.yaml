@@ -9,6 +9,7 @@ universe:
 sessions:
   premarket: true
   afterhours: true
+  regularhours: false   # regular session 09:30-16:00; opt-in, works on free IEX feed
 agent_weights:
   fundamental: 1
   technical: 0.8

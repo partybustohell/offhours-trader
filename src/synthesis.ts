@@ -159,3 +159,19 @@ export function thesisExpiry(dateYmd: string): string {
   if (guess - offsetAtResult !== result) result = guess - offsetAtResult;
   return new Date(result).toISOString();
 }
+
+/**
+ * ISO UTC instant of 16:00 ET (the close) on dateYmd itself — an RTH thesis is
+ * generated in the morning and traded only through that day's regular session.
+ */
+export function rthThesisExpiry(dateYmd: string): string {
+  const [y, m, d] = dateYmd.split('-').map(Number);
+  if (y === undefined || m === undefined || d === undefined || [y, m, d].some(Number.isNaN)) {
+    throw new Error(`invalid date: ${dateYmd}`);
+  }
+  const guess = Date.UTC(y, m - 1, d, 16);
+  let result = guess - etOffsetMs(new Date(guess));
+  const offsetAtResult = etOffsetMs(new Date(result));
+  if (guess - offsetAtResult !== result) result = guess - offsetAtResult;
+  return new Date(result).toISOString();
+}

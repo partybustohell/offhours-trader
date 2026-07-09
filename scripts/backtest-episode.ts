@@ -450,6 +450,7 @@ export async function runEpisode(
   });
   const thesis: Thesis = {
     date: day,
+    kind: 'offhours',
     generatedAt: new Date(startMs).toISOString(),
     expiresAt: flattenIso,
     entries,
@@ -463,6 +464,7 @@ export async function runEpisode(
     getDailyPl: () => ledger.getDailyPl(),
     getOpenOrders: () => ledger.getOpenOrders(),
     getTodayOrders: () => ledger.getTodayOrders(),
+    cancelOrdersFor: (t: string) => ledger.cancelOrdersFor(t),
     placeLimitOrder: async (o: ProposedOrder) => {
       const [acct, openOrders, todayOrders, dailyPl] = await Promise.all([
         ledger.getAccount(),
@@ -544,6 +546,7 @@ export async function runEpisode(
     if (!syntheticWritten && t >= syntheticAtMs) {
       const empty: Thesis = {
         date: d1,
+        kind: 'offhours',
         generatedAt: new Date(syntheticAtMs).toISOString(),
         expiresAt: thesisExpiry(d1),
         entries: [],

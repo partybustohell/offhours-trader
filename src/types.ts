@@ -49,8 +49,11 @@ export interface ThesisEntry {
   narrative: string;
   invalidationConditions: string[];
 }
+export type ThesisKind = 'offhours' | 'rth';
+
 export interface Thesis {
   date: string;
+  kind: ThesisKind; // offhours (pre/after-market) or rth (regular session)
   generatedAt: string; // ISO
   expiresAt: string; // ISO
   entries: ThesisEntry[];
@@ -74,6 +77,11 @@ export interface ProposedOrder {
   limitPrice: number;
   intent: 'entry' | 'exit';
   reason: string;
+  // false during the regular session; true (Alpaca extended_hours) otherwise.
+  extendedHours: boolean;
+  // Regular-session entries attach a native stop-loss at this price (Alpaca
+  // OTO). Only set on RTH entries — extended-hours stops do not execute.
+  stopLoss?: number;
 }
 export interface RiskDecision {
   allowed: boolean;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { computeThesisEntries, thesisExpiry } from '../src/synthesis.js';
+import { computeThesisEntries, thesisExpiry, rthThesisExpiry } from '../src/synthesis.js';
 import type { TickerMarketInfo } from '../src/candidates.js';
 import { ConfigSchema, type Config } from '../src/config.js';
 import type { AccountSnapshot, AnalystName, Direction, Verdict } from '../src/types.js';
@@ -220,5 +220,17 @@ describe('thesisExpiry', () => {
   it('midweek date expires the next calendar day at 20:00 ET', () => {
     // 2026-07-07 is a Tuesday -> Wed 2026-07-08 20:00 EDT.
     expect(thesisExpiry('2026-07-07')).toBe('2026-07-09T00:00:00.000Z');
+  });
+});
+
+describe('rthThesisExpiry', () => {
+  it('expires the same day at 16:00 ET (the close), summer EDT', () => {
+    // 16:00 EDT (UTC-4) = 20:00Z.
+    expect(rthThesisExpiry('2026-07-09')).toBe('2026-07-09T20:00:00.000Z');
+  });
+
+  it('expires the same day at 16:00 ET, winter EST', () => {
+    // 16:00 EST (UTC-5) = 21:00Z.
+    expect(rthThesisExpiry('2026-01-09')).toBe('2026-01-09T21:00:00.000Z');
   });
 });

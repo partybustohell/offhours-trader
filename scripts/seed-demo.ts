@@ -216,6 +216,7 @@ const verdicts: VerdictFile = {
 // so a scheduled executor tick cannot trade on it.
 const thesis: Thesis = {
   date: today,
+  kind: 'offhours',
   generatedAt: now.toISOString(),
   expiresAt: new Date(now.getTime() - 60_000).toISOString(),
   entries: [

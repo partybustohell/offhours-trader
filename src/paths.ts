@@ -10,7 +10,10 @@ export function ensureOut(): void {
 
 export const candidatesPath = (ymd: string) => path.join(OUT_DIR, `candidates-${ymd}.json`);
 export const verdictsPath = (ymd: string) => path.join(OUT_DIR, `verdicts-${ymd}.json`);
-export const thesisPath = (ymd: string) => path.join(OUT_DIR, `thesis-${ymd}.json`);
+// Off-hours keeps the bare name (backward compatible); RTH is suffixed so the
+// morning and evening theses coexist for the same date.
+export const thesisPath = (ymd: string, kind: 'offhours' | 'rth' = 'offhours') =>
+  path.join(OUT_DIR, kind === 'rth' ? `thesis-${ymd}-rth.json` : `thesis-${ymd}.json`);
 export const auditPath = (ymd: string) => path.join(OUT_DIR, `audit-${ymd}.jsonl`);
 export const statePath = () => path.join(OUT_DIR, 'state.json');
 

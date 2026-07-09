@@ -35,7 +35,7 @@ describe('ConfigSchema defaults', () => {
       min_avg_dollar_volume: 20_000_000,
       exclude: [],
     });
-    expect(cfg.sessions).toEqual({ premarket: true, afterhours: true });
+    expect(cfg.sessions).toEqual({ premarket: true, afterhours: true, regularhours: false });
     expect(cfg.agent_weights).toEqual({
       fundamental: 1.0,
       technical: 0.8,

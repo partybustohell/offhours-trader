@@ -19,6 +19,9 @@ export const ConfigSchema = z.object({
     .object({
       premarket: z.boolean().default(true),
       afterhours: z.boolean().default(true),
+      // Regular session 09:30-16:00 ET. Off by default: it's a distinct product
+      // (full liquidity, fresh morning thesis) and works on the free IEX feed.
+      regularhours: z.boolean().default(false),
     })
     .default({}),
   agent_weights: z
