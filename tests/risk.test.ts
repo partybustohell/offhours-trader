@@ -317,6 +317,21 @@ describe('riskCheck', () => {
       );
     });
 
+    it('counts only the UNFILLED remainder of a partially-filled resting entry (no double-count with its position)', () => {
+      // Resting entry AAA qty 100 @ $100, 60 filled: the 60 filled shares are
+      // already the AAA position ($6000); only the unfilled 40 ($4000) count as
+      // resting exposure. New entry BBB $1000 -> 6000 + 4000 + 1000 = 11000 < 15000.
+      // With the double-count bug it would be 6000 + 10000 + 1000 = 17000 -> rejected.
+      const ctx = makeCtx({
+        account: { equity: 100_000, cash: 0, positions: [makePosition({ ticker: 'AAA', marketValue: 6000, qty: 60 })] },
+        openOrders: [makeOpenOrder({ ticker: 'AAA', side: 'buy', qty: 100, filledQty: 60, limitPrice: 100, clientOrderId: 'entry-aaa' })],
+      });
+      const d = riskCheck(makeOrder({ ticker: 'BBB', qty: 50, limitPrice: 20 }), ctx);
+      expect(d.reasons).not.toContain('exceeds max gross exposure');
+      expect(d.reasons).not.toContain('exceeds max net exposure');
+      expect(d.allowed).toBe(true);
+    });
+
     it('never blocks exits, even with the book far over the caps', () => {
       const ctx = makeCtx({
         account: { equity: 100_000, cash: 0, positions: [makePosition({ ticker: 'MSFT', marketValue: 30_000, qty: 300 })] },

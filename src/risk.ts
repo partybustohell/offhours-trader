@@ -74,9 +74,15 @@ export function riskCheck(order: ProposedOrder, ctx: RiskContext): RiskDecision 
   if (isEntry) {
     const signedNotional = order.side === 'buy' ? notional : -notional;
     const restingEntries = ctx.openOrders.filter((o) => o.clientOrderId?.startsWith('entry-'));
-    const restingEntryGross = restingEntries.reduce((sum, o) => sum + o.qty * o.limitPrice, 0);
+    // Count only the UNFILLED remainder: the filled portion of a partially-
+    // filled resting entry already appears in the position marketValue below,
+    // so the full order qty would double-count it and could prematurely block
+    // a legitimate new entry. (Mirrors seedDeployedTodayUsd's filledQty logic.)
+    const restingUnfilledUsd = (o: BrokerOrder): number =>
+      (o.qty - (o.filledQty ?? 0)) * o.limitPrice;
+    const restingEntryGross = restingEntries.reduce((sum, o) => sum + restingUnfilledUsd(o), 0);
     const restingEntryNet = restingEntries.reduce(
-      (sum, o) => sum + (o.side === 'buy' ? 1 : -1) * o.qty * o.limitPrice,
+      (sum, o) => sum + (o.side === 'buy' ? 1 : -1) * restingUnfilledUsd(o),
       0,
     );
     const grossPositions = account.positions.reduce((sum, p) => sum + Math.abs(p.marketValue), 0);
