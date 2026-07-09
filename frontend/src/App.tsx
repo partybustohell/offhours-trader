@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type {
   AuditEvent,
+  BacktestResponse,
   CandidateFile,
   Config,
   OrdersResponse,
@@ -19,91 +20,270 @@ import {
   fetchStatus,
   fetchThesis,
   fetchVerdicts,
+  fmtCompactUsd,
+  isMissingKeysError,
+  postAction,
 } from './api';
-import type { BacktestResponse } from './types';
-import BacktestPanel from './panels/BacktestPanel';
-import StatusBar from './panels/StatusBar';
-import ActionsBar from './panels/ActionsBar';
-import CandidatesPanel from './panels/CandidatesPanel';
-import ThesisPanel from './panels/ThesisPanel';
-import VerdictsPanel from './panels/VerdictsPanel';
-import PositionsOrders from './panels/PositionsOrders';
-import AuditFeed from './panels/AuditFeed';
-import ConfigEditor from './panels/ConfigEditor';
+import { useHashView, type ViewId } from './router';
+import Overview from './views/Overview';
+import ThesisView from './views/ThesisView';
+import PositionsView from './views/PositionsView';
+import BacktestView from './views/BacktestView';
+import ConfigView from './views/ConfigView';
+import AuditView from './views/AuditView';
 
 const POLL_MS = 10_000;
 
+export interface AppData {
+  status: StatusResponse | null;
+  candidates: CandidateFile | null;
+  thesis: Thesis | null; // off-hours
+  thesisRth: Thesis | null;
+  verdicts: VerdictFile | null;
+  positions: PositionsResponse;
+  orders: OrdersResponse;
+  audit: AuditEvent[];
+  config: Config | null;
+  backtest: BacktestResponse | null;
+  offline: boolean;
+  lastUpdated: Date | null;
+}
+
+const NAV: { id: ViewId; label: string }[] = [
+  { id: 'overview', label: 'Overview' },
+  { id: 'thesis', label: 'Thesis' },
+  { id: 'positions', label: 'Positions' },
+  { id: 'backtest', label: 'Backtest' },
+  { id: 'config', label: 'Config' },
+  { id: 'audit', label: 'Audit' },
+];
+
+const SESSION_LABEL: Record<string, string> = {
+  premarket: 'Pre-market',
+  rth: 'Regular',
+  afterhours: 'After-hours',
+  closed: 'Closed',
+};
+
 export default function App() {
-  const [status, setStatus] = useState<StatusResponse | null>(null);
-  const [candidates, setCandidates] = useState<CandidateFile | null>(null);
-  const [thesis, setThesis] = useState<Thesis | null>(null);
-  const [verdicts, setVerdicts] = useState<VerdictFile | null>(null);
-  const [positions, setPositions] = useState<PositionsResponse>({ positions: [] });
-  const [orders, setOrders] = useState<OrdersResponse>({ orders: [] });
-  const [audit, setAudit] = useState<AuditEvent[]>([]);
-  const [config, setConfig] = useState<Config | null>(null);
-  const [backtest, setBacktest] = useState<BacktestResponse | null>(null);
-  const [offline, setOffline] = useState(false);
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [view, go] = useHashView();
+  const [d, setD] = useState<AppData>({
+    status: null,
+    candidates: null,
+    thesis: null,
+    thesisRth: null,
+    verdicts: null,
+    positions: { positions: [] },
+    orders: { orders: [] },
+    audit: [],
+    config: null,
+    backtest: null,
+    offline: false,
+    lastUpdated: null,
+  });
 
   const refresh = useCallback(async () => {
-    const [st, ca, th, ve, po, or, au, cf, bt] = await Promise.allSettled([
+    const [st, ca, th, thr, ve, po, or, au, cf, bt] = await Promise.allSettled([
       fetchStatus(),
       fetchCandidates(),
-      fetchThesis(),
+      fetchThesis('offhours'),
+      fetchThesis('rth'),
       fetchVerdicts(),
       fetchPositions(),
       fetchOrders(),
-      fetchAudit(100),
+      fetchAudit(150),
       fetchConfig(),
       fetchBacktest(),
     ]);
-    setOffline(st.status === 'rejected');
-    if (st.status === 'fulfilled') setStatus(st.value);
-    if (ca.status === 'fulfilled') setCandidates(ca.value);
-    if (th.status === 'fulfilled') setThesis(th.value);
-    if (ve.status === 'fulfilled') setVerdicts(ve.value);
-    if (po.status === 'fulfilled') setPositions(po.value);
-    if (or.status === 'fulfilled') setOrders(or.value);
-    if (au.status === 'fulfilled') setAudit(au.value);
-    if (cf.status === 'fulfilled') setConfig(cf.value);
-    if (bt.status === 'fulfilled') setBacktest(bt.value);
-    setLastUpdated(new Date());
+    setD((prev) => ({
+      status: st.status === 'fulfilled' ? st.value : prev.status,
+      candidates: ca.status === 'fulfilled' ? ca.value : prev.candidates,
+      thesis: th.status === 'fulfilled' ? th.value : prev.thesis,
+      thesisRth: thr.status === 'fulfilled' ? thr.value : prev.thesisRth,
+      verdicts: ve.status === 'fulfilled' ? ve.value : prev.verdicts,
+      positions: po.status === 'fulfilled' ? po.value : prev.positions,
+      orders: or.status === 'fulfilled' ? or.value : prev.orders,
+      audit: au.status === 'fulfilled' ? au.value : prev.audit,
+      config: cf.status === 'fulfilled' ? cf.value : prev.config,
+      backtest: bt.status === 'fulfilled' ? bt.value : prev.backtest,
+      offline: st.status === 'rejected',
+      lastUpdated: new Date(),
+    }));
   }, []);
 
   useEffect(() => {
     void refresh();
-    const timer = setInterval(() => void refresh(), POLL_MS);
-    return () => clearInterval(timer);
+    const t = setInterval(() => void refresh(), POLL_MS);
+    return () => clearInterval(t);
   }, [refresh]);
+
+  const halted = d.status?.halt?.halted === true;
+  const activeThesis =
+    d.status?.session === 'rth' ? (d.thesisRth ?? d.thesis) : (d.thesis ?? d.thesisRth);
+  const counts: Partial<Record<ViewId, number>> = {
+    positions: d.positions.positions.length,
+    thesis: activeThesis?.entries.length ?? 0,
+  };
 
   return (
     <div className="app">
-      <header className="statusbar">
-        <StatusBar status={status} lastUpdated={lastUpdated} offline={offline} />
-        <ActionsBar halted={status?.halt?.halted === true} onRefresh={refresh} />
-      </header>
-      <main className="workspace">
-        <section className="col col-thesis">
-          <ThesisPanel thesis={thesis} />
-          <VerdictsPanel data={verdicts} />
-          <BacktestPanel data={backtest} />
-        </section>
-        <section className="col col-market">
-          <CandidatesPanel data={candidates} />
-          <PositionsOrders
-            positions={positions.positions}
-            positionsError={positions.error}
-            orders={orders.orders}
-            ordersError={orders.error}
-            audit={audit}
-          />
-          <AuditFeed events={audit} />
-        </section>
-        <section className="col col-config">
-          <ConfigEditor config={config} onSaved={refresh} />
-        </section>
-      </main>
+      <NavRail view={view} go={go} config={d.config} counts={counts} />
+      <div className="stage">
+        <Telemetry data={d} onAction={refresh} halted={halted} />
+        <main className="view" key={view}>
+          {view === 'overview' && <Overview d={d} go={go} activeThesis={activeThesis} />}
+          {view === 'thesis' && <ThesisView d={d} />}
+          {view === 'positions' && <PositionsView d={d} />}
+          {view === 'backtest' && <BacktestView d={d} />}
+          {view === 'config' && <ConfigView d={d} onSaved={refresh} />}
+          {view === 'audit' && <AuditView d={d} />}
+        </main>
+      </div>
     </div>
+  );
+}
+
+function NavRail({
+  view,
+  go,
+  config,
+  counts,
+}: {
+  view: ViewId;
+  go: (v: ViewId) => void;
+  config: Config | null;
+  counts: Partial<Record<ViewId, number>>;
+}) {
+  return (
+    <nav className="rail">
+      <div className="rail-brand">
+        <div className="rail-mark">
+          <span className="glyph" />
+          offhours
+        </div>
+        <div className="rail-sub">instrument · v1</div>
+      </div>
+      <div className="rail-nav">
+        {NAV.map((n, i) => (
+          <button
+            key={n.id}
+            className={`rail-link${view === n.id ? ' active' : ''}`}
+            onClick={() => go(n.id)}
+          >
+            <span className="idx">{String(i + 1).padStart(2, '0')}</span>
+            {n.label}
+            {counts[n.id] ? <span className="rail-badge">{counts[n.id]}</span> : null}
+          </button>
+        ))}
+      </div>
+      <div className="rail-foot">
+        <div className="row">
+          <span>mode</span>
+          <b>{config?.mode ?? '—'}</b>
+        </div>
+        <div className="row">
+          <span>feed</span>
+          <b>{config?.data_feed ?? '—'}</b>
+        </div>
+        <div className="row">
+          <span>threshold</span>
+          <b>{config ? config.conviction_threshold.toFixed(2) : '—'}</b>
+        </div>
+      </div>
+    </nav>
+  );
+}
+
+function Telemetry({
+  data,
+  onAction,
+  halted,
+}: {
+  data: AppData;
+  onAction: () => void;
+  halted: boolean;
+}) {
+  const [clock, setClock] = useState('');
+  const [busy, setBusy] = useState<string | null>(null);
+  useEffect(() => {
+    const tick = () =>
+      setClock(
+        new Date().toLocaleTimeString('en-US', {
+          hour12: false,
+          timeZone: 'America/New_York',
+        }) + ' ET',
+      );
+    tick();
+    const t = setInterval(tick, 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  const st = data.status;
+  const mode = st?.mode ?? 'paper';
+  const equity = st?.equity;
+  const keyless = st?.error && isMissingKeysError(st.error);
+
+  const act = async (
+    path: '/api/pipeline/run' | '/api/executor/tick' | '/api/halt' | '/api/resume',
+    label: string,
+  ) => {
+    if (path === '/api/halt' && !window.confirm('Halt all trading until manually resumed?')) return;
+    setBusy(label);
+    await postAction(path);
+    await onAction();
+    setBusy(null);
+  };
+
+  return (
+    <header className="telemetry">
+      <div className="tel-cell">
+        <span className="label">Mode</span>
+        <span className="tel-val">
+          <span className={`badge ${mode}`}>{mode}</span>
+        </span>
+      </div>
+      <div className="tel-cell">
+        <span className="label">Session</span>
+        <span className="tel-val">
+          <span className="live-dot" />
+          {SESSION_LABEL[st?.session ?? 'closed'] ?? '—'}
+        </span>
+      </div>
+      <div className="tel-cell">
+        <span className="label">Equity</span>
+        <span className="tel-val">{keyless ? '—' : fmtCompactUsd(equity)}</span>
+      </div>
+      <div className="tel-cell">
+        <span className="label">Halt</span>
+        <span className="tel-val" style={{ color: halted ? 'var(--red)' : 'var(--muted)' }}>
+          {halted ? 'HALTED' : 'clear'}
+        </span>
+      </div>
+      <div className="tel-cell tel-spacer">
+        <span className="label">Local</span>
+        <span className="tel-clock">{clock}</span>
+      </div>
+      <div className="tel-actions">
+        <button className="btn" disabled={!!busy} onClick={() => void act('/api/pipeline/run', 'p')}>
+          {busy === 'p' ? '…' : 'Pipeline'}
+        </button>
+        <button className="btn" disabled={!!busy} onClick={() => void act('/api/executor/tick', 't')}>
+          {busy === 't' ? '…' : 'Tick'}
+        </button>
+        {halted ? (
+          <button
+            className="btn primary"
+            disabled={!!busy}
+            onClick={() => void act('/api/resume', 'r')}
+          >
+            Resume
+          </button>
+        ) : (
+          <button className="btn danger" disabled={!!busy} onClick={() => void act('/api/halt', 'h')}>
+            Halt
+          </button>
+        )}
+      </div>
+    </header>
   );
 }

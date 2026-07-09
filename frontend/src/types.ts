@@ -45,6 +45,7 @@ export interface ThesisEntry {
 }
 export interface Thesis {
   date: string;
+  kind: 'offhours' | 'rth';
   generatedAt: string;
   expiresAt: string;
   entries: ThesisEntry[];
@@ -119,7 +120,11 @@ export interface Config {
   max_spread_bps: number;
   max_chase_pct: number;
   max_drop_pct: number;
+  target_vol_pct: number;
+  max_position_loss_pct: number;
   daily_loss_halt_pct: number;
+  data_feed: 'iex' | 'sip';
+  max_quote_age_sec: number;
   executor_interval_min: number;
   thesis_run_time_et: string;
   model: {

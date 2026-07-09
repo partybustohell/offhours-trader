@@ -113,8 +113,9 @@ app.get(
 
 app.get(
   '/api/thesis',
-  wrap((_req, res) => {
-    res.json(latestDatedJson(thesisPath));
+  wrap((req, res) => {
+    const kind = req.query.kind === 'rth' ? 'rth' : 'offhours';
+    res.json(latestDatedJson((ymd) => thesisPath(ymd, kind)));
   }),
 );
 

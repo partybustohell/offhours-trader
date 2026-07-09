@@ -73,11 +73,12 @@ export async function fetchCandidates(): Promise<CandidateFile | null> {
   };
 }
 
-export async function fetchThesis(): Promise<Thesis | null> {
-  const raw = await getJson('/api/thesis');
+export async function fetchThesis(kind: 'offhours' | 'rth' = 'offhours'): Promise<Thesis | null> {
+  const raw = await getJson(`/api/thesis?kind=${kind}`);
   if (!isObj(raw) || !Array.isArray(raw.entries)) return null;
   return {
     date: typeof raw.date === 'string' ? raw.date : '',
+    kind: raw.kind === 'rth' ? 'rth' : 'offhours',
     generatedAt: typeof raw.generatedAt === 'string' ? raw.generatedAt : '',
     expiresAt: typeof raw.expiresAt === 'string' ? raw.expiresAt : '',
     entries: raw.entries as Thesis['entries'],
