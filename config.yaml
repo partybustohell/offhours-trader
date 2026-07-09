@@ -7,8 +7,8 @@ universe:
   min_avg_dollar_volume: 20000000
   exclude: []
 sessions:
-  premarket: true
-  afterhours: true
+  premarket: false      # off-hours trading disabled 2026-07-09
+  afterhours: false     # off-hours trading disabled 2026-07-09
   regularhours: true    # regular session 09:30-16:00; opt-in, works on free IEX feed
 agent_weights:
   fundamental: 1
