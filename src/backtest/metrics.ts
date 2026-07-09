@@ -121,6 +121,124 @@ export function tbillPerEpisodeUsd(rate: number, equityUsd: number, days: number
   return (equityUsd * rate * days) / 365;
 }
 
+// ---------- multiple-testing discipline (deflated Sharpe) ----------
+// Bailey & López de Prado. Every Sharpe here is PER-OBSERVATION (not
+// annualized). The point: when many strategy variants are tried, the best
+// observed Sharpe is inflated by selection; the deflated Sharpe ratio (DSR)
+// is the probability the TRUE Sharpe exceeds the multiple-testing benchmark,
+// correcting for non-normal returns (skew, kurtosis) and the trial count.
+// Pure math — no IO, no clock.
+
+export const EULER_MASCHERONI = 0.5772156649015329;
+
+/** Standard normal CDF (Zelen & Severo, A&S 26.2.17; |error| < 7.5e-8). */
+export function normalCdf(z: number): number {
+  const b1 = 0.319381530;
+  const b2 = -0.356563782;
+  const b3 = 1.781477937;
+  const b4 = -1.821255978;
+  const b5 = 1.330274429;
+  const p = 0.2316419;
+  const c = 0.3989422804014327; // 1/sqrt(2*pi)
+  const az = Math.abs(z);
+  const t = 1 / (1 + p * az);
+  const poly = ((((b5 * t + b4) * t + b3) * t + b2) * t + b1) * t;
+  const tail = c * Math.exp(-(az * az) / 2) * poly;
+  return z >= 0 ? 1 - tail : tail;
+}
+
+/** Inverse standard normal CDF (Acklam's rational approximation; |error| ~1e-9). */
+export function normalInv(pp: number): number {
+  if (!(pp > 0 && pp < 1)) throw new Error(`normalInv domain is (0,1): ${pp}`);
+  const a = [
+    -3.969683028665376e1, 2.209460984245205e2, -2.759285104469687e2, 1.38357751867269e2,
+    -3.066479806614716e1, 2.506628277459239e0,
+  ];
+  const b = [
+    -5.447609879822406e1, 1.615858368580409e2, -1.556989798598866e2, 6.680131188771972e1,
+    -1.328068155288572e1,
+  ];
+  const c = [
+    -7.784894002430293e-3, -3.223964580411365e-1, -2.400758277161838e0, -2.549732539343734e0,
+    4.374664141464968e0, 2.938163982698783e0,
+  ];
+  const d = [
+    7.784695709041462e-3, 3.224671290700398e-1, 2.445134137142996e0, 3.754408661907416e0,
+  ];
+  const plow = 0.02425;
+  const phigh = 1 - plow;
+  if (pp < plow) {
+    const q = Math.sqrt(-2 * Math.log(pp));
+    return (
+      (((((c[0]! * q + c[1]!) * q + c[2]!) * q + c[3]!) * q + c[4]!) * q + c[5]!) /
+      ((((d[0]! * q + d[1]!) * q + d[2]!) * q + d[3]!) * q + 1)
+    );
+  }
+  if (pp <= phigh) {
+    const q = pp - 0.5;
+    const r = q * q;
+    return (
+      ((((((a[0]! * r + a[1]!) * r + a[2]!) * r + a[3]!) * r + a[4]!) * r + a[5]!) * q) /
+      (((((b[0]! * r + b[1]!) * r + b[2]!) * r + b[3]!) * r + b[4]!) * r + 1)
+    );
+  }
+  const q = Math.sqrt(-2 * Math.log(1 - pp));
+  return -(
+    (((((c[0]! * q + c[1]!) * q + c[2]!) * q + c[3]!) * q + c[4]!) * q + c[5]!) /
+    ((((d[0]! * q + d[1]!) * q + d[2]!) * q + d[3]!) * q + 1)
+  );
+}
+
+/**
+ * Expected maximum per-observation Sharpe from `nTrials` independent trials,
+ * each with Sharpe std `sharpeStd` (the multiple-testing benchmark SR*).
+ * nTrials = 1 -> 0 (no selection inflation). Uses the Gumbel/extreme-value
+ * approximation from López de Prado's DSR.
+ */
+export function expectedMaxSharpe(nTrials: number, sharpeStd = 1): number {
+  if (!Number.isInteger(nTrials) || nTrials < 1) {
+    throw new Error(`nTrials must be a positive integer: ${nTrials}`);
+  }
+  if (nTrials === 1) return 0;
+  const g = EULER_MASCHERONI;
+  const z1 = normalInv(1 - 1 / nTrials);
+  const z2 = normalInv(1 - 1 / (nTrials * Math.E));
+  return sharpeStd * ((1 - g) * z1 + g * z2);
+}
+
+/**
+ * Probabilistic Sharpe ratio: P(true SR > benchmarkSR) given an observed
+ * per-observation Sharpe over `nObs` returns with `skew` and `kurt` (kurt is
+ * the full fourth moment; 3 is Gaussian).
+ */
+export function probabilisticSharpe(
+  observedSR: number,
+  benchmarkSR: number,
+  nObs: number,
+  skew = 0,
+  kurt = 3,
+): number {
+  if (!Number.isInteger(nObs) || nObs < 2) throw new Error(`nObs must be an integer >= 2: ${nObs}`);
+  const denom = Math.sqrt(1 - skew * observedSR + ((kurt - 1) / 4) * observedSR * observedSR);
+  return normalCdf(((observedSR - benchmarkSR) * Math.sqrt(nObs - 1)) / denom);
+}
+
+/**
+ * Deflated Sharpe ratio: the probabilistic Sharpe against the expected-maximum
+ * benchmark for `nTrials` variants tried. Higher nTrials -> higher benchmark
+ * -> lower DSR. Feed it the honest trial count from docs/TRIAL-REGISTRY.md.
+ */
+export function deflatedSharpe(
+  observedSR: number,
+  nTrials: number,
+  skew: number,
+  kurt: number,
+  nObs: number,
+  sharpeStd = 1,
+): number {
+  return probabilisticSharpe(observedSR, expectedMaxSharpe(nTrials, sharpeStd), nObs, skew, kurt);
+}
+
 // ---------- economics ----------
 
 export const DEFAULT_EPISODE_EQUITY_USD = 50_000;
@@ -443,6 +561,12 @@ export interface ReportMeta {
   mechanicalNote?: string;
   /** Descriptive sweep deliverable (abstention/fill-rate vs threshold curves). */
   sensitivityNote?: string;
+  /**
+   * Multiple-testing governance: when set and the headline stratum has fewer
+   * than this many trades, the economic bar refuses a PASS/FAIL verdict and
+   * prints "INSUFFICIENT N" instead. Omit -> no gate (legacy behavior).
+   */
+  minTradesForEconomicClaim?: number;
   validity?: Partial<Record<ValidityKey, string>>;
 }
 
@@ -475,9 +599,16 @@ function economicsSection(e: StratumEconomics): string {
   );
 }
 
-function economicsBar(e: StratumEconomics): string {
+function economicsBar(e: StratumEconomics, minTradesForClaim?: number): string {
   const c = e.comparison;
   if (e.nEpisodes === 0) return 'NOT EVALUATED — no episodes in stratum R.';
+  if (minTradesForClaim !== undefined && e.nTrades < minTradesForClaim) {
+    return [
+      `**INSUFFICIENT N — no economic verdict.** ${e.nTrades} trades < min_trades_for_economic_claim ${minTradesForClaim}.`,
+      `At this n the bootstrap CI above, not a point PASS/FAIL, is the claim; a handful of trades cannot clear a deflated-Sharpe hurdle. Accumulate trades (paper soak) before any economic claim.`,
+      `- mean/episode net P&L (fees + borrow included): ${usd(e.netPnlMeanUsd)}; mean/episode LLM cost: ${usd(c.llmCostMeanUsd)}.`,
+    ].join('\n');
+  }
   const lines: string[] = [];
   if (c.tbillPerEpisodeUsd === null) {
     lines.push(
@@ -617,7 +748,7 @@ export function renderReport(all: MetricsBundle, meta: ReportMeta = {}): string 
     '',
     '### 1.1 Economic bar',
     '',
-    economicsBar(all.headline),
+    economicsBar(all.headline, meta.minTradesForEconomicClaim),
     '',
     '## 2. H-stratum economics',
     '',

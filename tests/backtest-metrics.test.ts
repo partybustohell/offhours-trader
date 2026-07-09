@@ -8,11 +8,16 @@ import {
   behavior,
   bootstrapCi,
   computeAll,
+  deflatedSharpe,
   designWeightedEstimate,
   episodeNetUsd,
+  expectedMaxSharpe,
   hEconomics,
   headlineEconomics,
   mulberry32,
+  normalCdf,
+  normalInv,
+  probabilisticSharpe,
   renderReport,
   tbillPerEpisodeUsd,
   tradeNetUsd,
@@ -398,6 +403,67 @@ describe('attribution', () => {
       expect(row).toMatchObject({ k: 0, n: 0, winRate: null, wilson: null, suppressed: true });
     }
     expect(rep.totalTrades).toBe(47);
+  });
+});
+
+describe('multiple-testing discipline (deflated Sharpe)', () => {
+  it('normalCdf matches known anchors and is symmetric', () => {
+    expect(normalCdf(0)).toBeCloseTo(0.5, 6);
+    expect(normalCdf(1.959963985)).toBeCloseTo(0.975, 4);
+    expect(normalCdf(-1.959963985)).toBeCloseTo(0.025, 4);
+    for (const z of [0.3, 1, 2.5]) expect(normalCdf(z) + normalCdf(-z)).toBeCloseTo(1, 6);
+  });
+
+  it('normalInv inverts normalCdf and guards its domain', () => {
+    expect(normalInv(0.5)).toBeCloseTo(0, 6);
+    expect(normalInv(0.975)).toBeCloseTo(1.959963985, 4);
+    expect(normalInv(0.025)).toBeCloseTo(-1.959963985, 4);
+    for (const p of [0.1, 0.4, 0.8, 0.995]) expect(normalCdf(normalInv(p))).toBeCloseTo(p, 5);
+    expect(() => normalInv(0)).toThrow(/domain/);
+    expect(() => normalInv(1)).toThrow(/domain/);
+  });
+
+  it('probabilisticSharpe is 0.5 at the benchmark and monotone increasing in observed SR', () => {
+    expect(probabilisticSharpe(0.2, 0.2, 100)).toBeCloseTo(0.5, 6);
+    expect(probabilisticSharpe(0.3, 0.2, 100)).toBeGreaterThan(0.5);
+    expect(probabilisticSharpe(0.1, 0.2, 100)).toBeLessThan(0.5);
+    // more observations sharpen the same edge toward certainty
+    expect(probabilisticSharpe(0.3, 0.2, 500)).toBeGreaterThan(probabilisticSharpe(0.3, 0.2, 50));
+  });
+
+  it('expectedMaxSharpe is 0 for one trial and rises with the trial count', () => {
+    expect(expectedMaxSharpe(1)).toBe(0);
+    expect(expectedMaxSharpe(10)).toBeGreaterThan(0);
+    expect(expectedMaxSharpe(1000)).toBeGreaterThan(expectedMaxSharpe(10));
+    expect(() => expectedMaxSharpe(0)).toThrow(/positive integer/);
+  });
+
+  it('deflatedSharpe falls as more trials are tried on the same observed Sharpe', () => {
+    const one = deflatedSharpe(0.3, 1, 0, 3, 250);
+    const many = deflatedSharpe(0.3, 100, 0, 3, 250);
+    expect(one).toBeGreaterThan(many);
+    expect(one).toBeGreaterThan(0.5); // vs a zero benchmark
+    for (const v of [one, many]) {
+      expect(v).toBeGreaterThanOrEqual(0);
+      expect(v).toBeLessThanOrEqual(1);
+    }
+  });
+});
+
+describe('economic-claim min-N gate', () => {
+  // fiveEpisodes are all stratum R with 5 trades total.
+  const bundle = computeAll(fiveEpisodes, { seed: 42, tbillAnnualRate: 0.05 });
+
+  it('refuses an economic verdict below the trade floor', () => {
+    const report = renderReport(bundle, { minTradesForEconomicClaim: 50 });
+    expect(report).toContain('INSUFFICIENT N — no economic verdict');
+    expect(report).not.toContain('**Economic bar: PASSES**');
+    expect(report).not.toContain('**Economic bar: FAILS**');
+  });
+
+  it('emits the verdict when the floor is met and when no floor is set', () => {
+    expect(renderReport(bundle, { minTradesForEconomicClaim: 5 })).toContain('**Economic bar: PASSES**');
+    expect(renderReport(bundle, {})).toContain('**Economic bar: PASSES**');
   });
 });
 

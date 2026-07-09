@@ -206,6 +206,87 @@ describe('computeThesisEntries', () => {
   });
 });
 
+describe('computeThesisEntries — priority ordering, floor, and name cap', () => {
+  // Three long verdicts per ticker (F/S/T): directional weight 2.8, so the
+  // score equals the shared conviction; quorum 3 and min_agreeing 2 are met.
+  const longs = (ticker: string, conviction: number): Verdict[] => [
+    v('fundamental', 'long', conviction, [], ticker),
+    v('sentiment', 'long', conviction, [], ticker),
+    v('technical', 'long', conviction, [], ticker),
+  ];
+  const multiMi = (
+    rows: Record<string, { price: number; vol?: number }>,
+  ): Map<string, TickerMarketInfo> => {
+    const m = new Map<string, TickerMarketInfo>();
+    for (const [ticker, { price, vol }] of Object.entries(rows)) {
+      m.set(ticker, {
+        lastPrice: price,
+        avgDollarVolume20d: 1e9,
+        ...(vol !== undefined ? { realizedVolAnnualized: vol } : {}),
+      });
+    }
+    return m;
+  };
+  const flat = multiMi({ AAA: { price: 100 }, BBB: { price: 100 }, CCC: { price: 100 } });
+  const t50 = { conviction_threshold: 0.5 };
+
+  it('orders entries by weightedConviction desc regardless of input order', () => {
+    // fed BBB(0.6), AAA(0.9), CCC(0.75) — sorted output must be AAA, CCC, BBB.
+    const verdicts = [...longs('BBB', 0.6), ...longs('AAA', 0.9), ...longs('CCC', 0.75)];
+    const { entries } = computeThesisEntries(verdicts, flat, account(100_000), cfg(t50));
+    expect(entries.map((e) => e.ticker)).toEqual(['AAA', 'CCC', 'BBB']);
+    expect(entries[0]!.weightedConviction).toBeCloseTo(0.9, 10);
+  });
+
+  it('conviction_per_risk divides conviction by realized vol', () => {
+    // per-risk: BBB 0.6/0.2=3.0 > CCC 0.75/0.5=1.5 > AAA 0.9/0.9=1.0
+    const verdicts = [...longs('AAA', 0.9), ...longs('BBB', 0.6), ...longs('CCC', 0.75)];
+    const { entries } = computeThesisEntries(
+      verdicts,
+      multiMi({ AAA: { price: 100, vol: 0.9 }, BBB: { price: 100, vol: 0.2 }, CCC: { price: 100, vol: 0.5 } }),
+      account(100_000),
+      cfg({ ...t50, deploy_priority: 'conviction_per_risk' }),
+    );
+    expect(entries.map((e) => e.ticker)).toEqual(['BBB', 'CCC', 'AAA']);
+  });
+
+  it('breaks conviction ties deterministically by ticker', () => {
+    const verdicts = [...longs('ZZZ', 0.8), ...longs('AAA', 0.8), ...longs('MMM', 0.8)];
+    const { entries } = computeThesisEntries(
+      verdicts,
+      multiMi({ AAA: { price: 100 }, MMM: { price: 100 }, ZZZ: { price: 100 } }),
+      account(100_000),
+      cfg(t50),
+    );
+    expect(entries.map((e) => e.ticker)).toEqual(['AAA', 'MMM', 'ZZZ']);
+  });
+
+  it('drops entries below the min-position floor with the canonical reason', () => {
+    // base 2000: AAA 1800, CCC 1500 kept; BBB 1200 < 1400 floor -> dropped.
+    const verdicts = [...longs('AAA', 0.9), ...longs('BBB', 0.6), ...longs('CCC', 0.75)];
+    const { entries, skipped } = computeThesisEntries(
+      verdicts,
+      flat,
+      account(100_000),
+      cfg({ ...t50, min_position_notional_usd: 1400 }),
+    );
+    expect(entries.map((e) => e.ticker)).toEqual(['AAA', 'CCC']);
+    expect(skipped).toContainEqual({ ticker: 'BBB', reason: 'below min position' });
+  });
+
+  it('caps the entry count to max_open_names, keeping the top-conviction names', () => {
+    const verdicts = [...longs('AAA', 0.9), ...longs('BBB', 0.6), ...longs('CCC', 0.75)];
+    const { entries, skipped } = computeThesisEntries(
+      verdicts,
+      flat,
+      account(100_000),
+      cfg({ ...t50, max_open_names: 2 }),
+    );
+    expect(entries.map((e) => e.ticker)).toEqual(['AAA', 'CCC']);
+    expect(skipped).toContainEqual({ ticker: 'BBB', reason: 'over max_open_names' });
+  });
+});
+
 describe('thesisExpiry', () => {
   it('summer Friday expires Monday 20:00 EDT (UTC-4)', () => {
     // 2026-07-10 is a Friday; next weekday is Mon 2026-07-13.

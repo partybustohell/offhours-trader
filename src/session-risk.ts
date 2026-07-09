@@ -1,0 +1,44 @@
+import type { Session } from './types.js';
+import type { Config } from './config.js';
+
+// Session boundaries in ET minutes-since-midnight (mirror src/clock.ts):
+//   premarket 04:00-09:30 = [240, 570)
+//   rth       09:30-16:00 = [570, 960)
+//   afterhours 16:00-20:00 = [960, 1200)
+const RTH_OPEN_MIN = 570; // 09:30
+const RTH_CLOSE_MIN = 960; // 16:00
+
+/** Parse "HH:MM" (24h ET) to minutes since ET midnight. */
+export function hmToMinutes(hm: string): number {
+  const parts = hm.split(':');
+  const h = Number(parts[0]);
+  const m = Number(parts[1]);
+  if (parts.length !== 2 || Number.isNaN(h) || Number.isNaN(m)) {
+    throw new Error(`invalid HH:MM time: ${hm}`);
+  }
+  return h * 60 + m;
+}
+
+/**
+ * Whether a NEW entry may be placed at this ET wall-clock minute. Purely a
+ * function of the clock and config — no market data, so it behaves identically
+ * on IEX and SIP. Blocks the RTH open/close windows (vol + spread spikes) and
+ * the deep-premarket / late-afterhours liquidity vacuum. `closed` always
+ * blocks. EXITS must never be gated by this — call it only on the entry path.
+ */
+export function entryTimingAllowed(session: Session, minutesET: number, cfg: Config): boolean {
+  const b = cfg.entry_blackout;
+  switch (session) {
+    case 'rth': {
+      const openEnd = RTH_OPEN_MIN + b.rth_open_min; // block [09:30, openEnd)
+      const closeStart = RTH_CLOSE_MIN - b.rth_close_min; // block [closeStart, 16:00)
+      return minutesET >= openEnd && minutesET < closeStart;
+    }
+    case 'premarket':
+      return minutesET >= hmToMinutes(b.premarket_start_hm);
+    case 'afterhours':
+      return minutesET < hmToMinutes(b.afterhours_end_hm);
+    default:
+      return false; // 'closed' — nothing trades
+  }
+}

@@ -6,6 +6,7 @@ import type { ProposedOrder, QuoteSnapshot, Thesis, ThesisKind } from './types.j
 import type { Config } from './config.js';
 import { loadConfig } from './config.js';
 import { currentSession, nowET, sessionEnabled } from './clock.js';
+import { entryTimingAllowed } from './session-risk.js';
 import { appendAudit } from './audit.js';
 import { ensureOut, OUT_DIR, readJsonIfExists, thesisPath } from './paths.js';
 import { readHaltState, writeHalt } from './state.js';
@@ -310,7 +311,26 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
     }
   }
 
+  // Entries-only timing blackout (feed-independent wall-clock gate). Exits
+  // already ran above and are never subject to this. A blocked window skips
+  // ALL new entries this tick, leaving open positions monitored.
+  const entryMinutes = nowET(now).minutes;
+  const entriesAllowedByTiming = entryTimingAllowed(session, entryMinutes, cfg);
+  if (!entriesAllowedByTiming && thesis.entries.length > 0) {
+    appendAudit({
+      kind: 'tick',
+      data: {
+        stage: 'entry_blackout',
+        session,
+        minutes: entryMinutes,
+        action: 'skip_entries',
+        count: thesis.entries.length,
+      },
+    });
+  }
+
   for (const entry of thesis.entries) {
+    if (!entriesAllowedByTiming) break; // timing blackout: no new entries this tick
     const ticker = entry.ticker.toUpperCase();
     if (account.positions.some((p) => p.ticker.toUpperCase() === ticker)) {
       skip(ticker, 'position exists');

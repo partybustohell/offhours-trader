@@ -571,6 +571,10 @@ describe('report aggregation (driver writeReport)', () => {
     expect(report).toContain('Abstention rate (stratum R only, n=2): **50.0%** (1/2)');
     expect(report).toContain('force-flatten');
     expect(report).toContain('not shortable');
-    expect(report).toContain('Economic bar:');
+    // Governance gate: with min_trades_for_economic_claim (config default 50)
+    // and only a handful of trades, the report refuses an economic PASS/FAIL
+    // verdict rather than over-claiming from small n.
+    expect(report).toContain('INSUFFICIENT N — no economic verdict');
+    expect(report).not.toContain('**Economic bar: PASSES**');
   });
 });

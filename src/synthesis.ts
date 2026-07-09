@@ -107,7 +107,43 @@ export function computeThesisEntries(
     entries.push({ ticker, direction, weightedConviction, limitBand, targetNotionalUsd, invalidationConditions });
   }
 
-  return { entries, skipped };
+  // Sizing/portfolio discipline (deterministic, ethos-preserving): this only
+  // orders, drops, and caps — it never adds risk or a directional vote.
+  //
+  // 1) Priority order. The executor consumes thesis.entries in array order and
+  //    stops opening once the daily-deploy cap binds, so entry ORDER decides
+  //    which names get funded. Sort so the best names go first, with a
+  //    deterministic ticker tie-break. 'conviction_per_risk' divides by the
+  //    name's realized vol so a fixed vol budget buys the best risk-adjusted
+  //    names first (missing vol -> treated as 1).
+  const volOf = (ticker: string): number => {
+    const v = info.get(ticker)?.realizedVolAnnualized;
+    return v && v > 0 ? v : 1;
+  };
+  const priorityOf = (e: Omit<ThesisEntry, 'narrative'>): number =>
+    cfg.deploy_priority === 'conviction_per_risk'
+      ? e.weightedConviction / volOf(e.ticker)
+      : e.weightedConviction;
+  entries.sort(
+    (a, b) =>
+      priorityOf(b) - priorityOf(a) || (a.ticker < b.ticker ? -1 : a.ticker > b.ticker ? 1 : 0),
+  );
+
+  // 2) Drop sub-floor positions (whole-share dust) and concentrate to the top
+  //    max_open_names, both AFTER the sort so the highest-priority names
+  //    survive the cap.
+  const funded: Omit<ThesisEntry, 'narrative'>[] = [];
+  for (const e of entries) {
+    if (e.targetNotionalUsd < cfg.min_position_notional_usd) {
+      skipped.push({ ticker: e.ticker, reason: 'below min position' });
+    } else if (funded.length >= cfg.max_open_names) {
+      skipped.push({ ticker: e.ticker, reason: 'over max_open_names' });
+    } else {
+      funded.push(e);
+    }
+  }
+
+  return { entries: funded, skipped };
 }
 
 // ET-minus-UTC offset in ms at the given instant, via Intl (DST-safe).

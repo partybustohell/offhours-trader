@@ -259,6 +259,76 @@ describe('riskCheck', () => {
     });
   });
 
+  describe('rule 10/11: cross-day gross and net exposure caps (entries only)', () => {
+    // Defaults at equity 100k: gross cap 15% = 15000, net cap 12% = 12000.
+    it('rejects an entry that pushes gross book over the cap', () => {
+      const ctx = makeCtx({
+        account: { equity: 100_000, cash: 0, positions: [makePosition({ ticker: 'MSFT', marketValue: 14_000, qty: 140 })] },
+      });
+      const d = riskCheck(makeOrder({ ticker: 'AAPL', qty: 100, limitPrice: 20 }), ctx); // +2000 -> 16000
+      expect(d.allowed).toBe(false);
+      expect(d.reasons).toContain('exceeds max gross exposure');
+    });
+
+    it('rejects an entry that pushes signed net over the cap', () => {
+      const ctx = makeCtx({
+        account: { equity: 100_000, cash: 0, positions: [makePosition({ ticker: 'MSFT', marketValue: 11_000, qty: 110 })] },
+      });
+      const d = riskCheck(makeOrder({ ticker: 'AAPL', side: 'buy', qty: 100, limitPrice: 20 }), ctx); // net 13000 > 12000
+      expect(d.allowed).toBe(false);
+      expect(d.reasons).toContain('exceeds max net exposure');
+      expect(d.reasons).not.toContain('exceeds max gross exposure'); // 13000 < 15000 gross
+    });
+
+    it('nets a hedged book down: a long + a short offsets net but not gross', () => {
+      const ctx = makeCtx({
+        account: {
+          equity: 100_000,
+          cash: 0,
+          positions: [
+            makePosition({ ticker: 'MSFT', marketValue: 7000, qty: 70, side: 'long' }),
+            makePosition({ ticker: 'GOOG', marketValue: -7000, qty: -70, side: 'short' }),
+          ],
+        },
+      });
+      // gross 14000 + 2000 = 16000 > 15000 -> gross breach; net 0 + 2000 fine.
+      const d = riskCheck(makeOrder({ ticker: 'AAPL', qty: 100, limitPrice: 20 }), ctx);
+      expect(d.reasons).toContain('exceeds max gross exposure');
+      expect(d.reasons).not.toContain('exceeds max net exposure');
+    });
+
+    it('counts resting ENTRY orders toward gross but ignores resting exits', () => {
+      const base = { equity: 100_000, cash: 0, positions: [makePosition({ ticker: 'MSFT', marketValue: 12_000, qty: 120 })] };
+      // resting entry order (tagged) for a third ticker: 12000 + 1500 + 2000 = 15500 > 15000.
+      const withEntry = makeCtx({
+        account: base,
+        openOrders: [makeOpenOrder({ ticker: 'XYZ', side: 'buy', qty: 75, limitPrice: 20, clientOrderId: 'entry-xyz' })],
+      });
+      expect(riskCheck(makeOrder({ ticker: 'AAPL', qty: 100, limitPrice: 20 }), withEntry).reasons).toContain(
+        'exceeds max gross exposure',
+      );
+      // an EXIT-tagged resting order does not add exposure: 12000 + 0 + 2000 = 14000 < 15000.
+      const withExit = makeCtx({
+        account: base,
+        openOrders: [makeOpenOrder({ ticker: 'XYZ', side: 'sell', qty: 250, limitPrice: 20, clientOrderId: 'exit-xyz' })],
+      });
+      expect(riskCheck(makeOrder({ ticker: 'AAPL', qty: 100, limitPrice: 20 }), withExit).reasons).not.toContain(
+        'exceeds max gross exposure',
+      );
+    });
+
+    it('never blocks exits, even with the book far over the caps', () => {
+      const ctx = makeCtx({
+        account: { equity: 100_000, cash: 0, positions: [makePosition({ ticker: 'MSFT', marketValue: 30_000, qty: 300 })] },
+      });
+      const d = riskCheck(
+        makeOrder({ ticker: 'MSFT', side: 'sell', intent: 'exit', qty: 300, limitPrice: 100 }),
+        ctx,
+      );
+      expect(d).toEqual({ allowed: true, reasons: [] });
+    });
+  });
+
   describe('reason accumulation', () => {
     it('collects all simultaneous violations without short-circuiting', () => {
       const ctx = makeCtx({

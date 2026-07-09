@@ -38,6 +38,37 @@ export const ConfigSchema = z.object({
   min_agreeing: z.number().int().min(1).max(5).default(2),
   max_position_pct: z.number().positive().default(5),
   max_daily_deploy_pct: z.number().positive().default(10),
+  // Order in which thesis entries are funded when the daily-deploy cap binds
+  // in the executor. 'conviction' funds the highest-conviction names first;
+  // 'conviction_per_risk' divides conviction by the name's realized vol so a
+  // fixed vol budget buys the best risk-adjusted names first. Deterministic
+  // tie-break by ticker. (The executor consumes thesis.entries in array order.)
+  deploy_priority: z.enum(['conviction', 'conviction_per_risk']).default('conviction'),
+  // A funded position must clear this dollar floor, else it is dropped in
+  // synthesis. Below it, whole-share rounding turns the target into 1-share
+  // dust and quantization error dominates the intended sizing.
+  min_position_notional_usd: z.number().min(0).default(250),
+  // Cap on the number of entries a single thesis emits, applied AFTER the
+  // conviction-priority sort so the best names survive. Concentrates the thin
+  // book instead of fragmenting the deploy budget across many tiny positions.
+  max_open_names: z.number().int().min(1).max(50).default(5),
+  // Entries-only intraday timing blackout (wall-clock; feed-independent).
+  // Avoids the RTH open/close vol+spread spikes and the deep-premarket /
+  // late-afterhours liquidity vacuum. Exits are NEVER subject to this.
+  entry_blackout: z
+    .object({
+      rth_open_min: z.number().int().min(0).max(120).default(10),
+      rth_close_min: z.number().int().min(0).max(120).default(10),
+      premarket_start_hm: z.string().regex(/^\d{2}:\d{2}$/).default('08:00'),
+      afterhours_end_hm: z.string().regex(/^\d{2}:\d{2}$/).default('18:00'),
+    })
+    .default({}),
+  // Cross-day exposure backstop in the risk gate (entries only). Sits ABOVE
+  // the per-day deploy cap: bounds the total book that can accumulate over
+  // multiple sessions. Gross = sum of absolute position + resting-entry +
+  // this-order notional; net = the signed version.
+  max_gross_exposure_pct: z.number().positive().default(15),
+  max_net_exposure_pct: z.number().positive().default(12),
   // Risk-parity sizing: a position is scaled DOWN when the name's annualized
   // realized vol exceeds this reference, so dollar risk is roughly equal
   // across names (an 80%-vol name gets half the size of a 40%-vol name).
@@ -62,6 +93,11 @@ export const ConfigSchema = z.object({
   daily_loss_halt_pct: z.number().positive().default(3),
   executor_interval_min: z.number().int().positive().default(15),
   thesis_run_time_et: z.string().default('17:00'),
+  // Backtest/report governance only (no trading effect): the report refuses to
+  // print an economic PASS/FAIL verdict below this many headline-stratum
+  // trades. Guards against an economic claim from a handful of trades. Paired
+  // with the deflated-Sharpe hurdle and docs/TRIAL-REGISTRY.md.
+  min_trades_for_economic_claim: z.number().int().min(0).default(50),
   model: z
     .object({
       analysts: z.string().default('claude-sonnet-5'),
@@ -103,7 +139,7 @@ export function saveConfig(next: unknown, configPath: string = CONFIG_PATH): Con
   const patch = next as Record<string, unknown>;
   const candidate: Record<string, unknown> = { ...current, ...patch };
   // one level of nesting: merge known object fields key-by-key
-  for (const key of ['universe', 'sessions', 'agent_weights', 'model'] as const) {
+  for (const key of ['universe', 'sessions', 'agent_weights', 'model', 'entry_blackout'] as const) {
     if (patch[key] !== undefined) {
       if (patch[key] === null || typeof patch[key] !== 'object' || Array.isArray(patch[key])) {
         throw new Error(`invalid config: ${key} must be an object`);

@@ -59,6 +59,19 @@ describe('ConfigSchema defaults', () => {
       synthesizer: 'claude-fable-5',
       executor: 'claude-sonnet-5',
     });
+    // quant P0 knobs
+    expect(cfg.deploy_priority).toBe('conviction');
+    expect(cfg.min_position_notional_usd).toBe(250);
+    expect(cfg.max_open_names).toBe(5);
+    expect(cfg.max_gross_exposure_pct).toBe(15);
+    expect(cfg.max_net_exposure_pct).toBe(12);
+    expect(cfg.min_trades_for_economic_claim).toBe(50);
+    expect(cfg.entry_blackout).toEqual({
+      rth_open_min: 10,
+      rth_close_min: 10,
+      premarket_start_hm: '08:00',
+      afterhours_end_hm: '18:00',
+    });
   });
 });
 
@@ -144,6 +157,14 @@ describe('saveConfig', () => {
     fs.writeFileSync(configPath, stringifyYaml({ quorum: 2 }));
     expect(() => saveConfig('mode: live', configPath)).toThrowError(/must be an object/);
     expect(() => saveConfig(null, configPath)).toThrowError(/must be an object/);
+  });
+
+  it('merges entry_blackout key-by-key like the other nested objects', () => {
+    fs.writeFileSync(configPath, stringifyYaml({ entry_blackout: { rth_open_min: 20 } }));
+    const saved = saveConfig({ entry_blackout: { afterhours_end_hm: '17:00' } }, configPath);
+    expect(saved.entry_blackout.rth_open_min).toBe(20); // preserved from disk, not reset
+    expect(saved.entry_blackout.afterhours_end_hm).toBe('17:00'); // patched
+    expect(saved.entry_blackout.rth_close_min).toBe(10); // default filled
   });
 });
 

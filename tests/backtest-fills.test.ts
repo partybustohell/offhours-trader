@@ -204,3 +204,32 @@ describe('order shape invariants', () => {
     expect(() => tryFill(order, bars, iso(D, '17:00:00'))).toThrow(/invariant/);
   });
 });
+
+describe('marketable vs passive fills', () => {
+  const placed = iso(D, '17:00:00');
+  const buyP = (qty: number, limitPrice: number): FillOrderSpec => ({ side: 'buy', qty, limitPrice, marketable: false });
+  const sellP = (qty: number, limitPrice: number): FillOrderSpec => ({ side: 'sell', qty, limitPrice, marketable: false });
+
+  it('marketable (default) fills on a touch-through the passive order rejects', () => {
+    const touch = [bar(D, '17:05:00', { l: 99.99 })]; // one cent through the 100 limit
+    expect(tryFill(buy(5, 100), touch, placed)?.atIso).toBe(iso(D, '17:05:00')); // marketable fills
+    expect(tryFill(buyP(5, 100), touch, placed)).toBeNull(); // passive needs a full tick through
+  });
+
+  it('passive fills once the market trades a full tick through', () => {
+    expect(tryFill(buyP(5, 100), [bar(D, '17:05:00', { l: 99.98 })], placed)?.atIso).toBe(iso(D, '17:05:00'));
+  });
+
+  it('mirrors for passive sells: a tick above the limit is required', () => {
+    expect(tryFill(sellP(5, 100), [bar(D, '17:05:00', { h: 100.01 })], placed)).toBeNull();
+    expect(tryFill(sellP(5, 100), [bar(D, '17:05:00', { h: 100.02 })], placed)?.atIso).toBe(iso(D, '17:05:00'));
+  });
+
+  it('passive demands the heavier volume guard (40x vs 20x)', () => {
+    // qty 10: marketable needs 200 shares, passive needs 400.
+    const at399 = [bar(D, '17:05:00', { l: 99.98, v: 399 })];
+    expect(tryFill(buy(10, 100), [bar(D, '17:05:00', { l: 99.98, v: 200 })], placed)?.atIso).toBe(iso(D, '17:05:00'));
+    expect(tryFill(buyP(10, 100), at399, placed)).toBeNull(); // 399 < 400
+    expect(tryFill(buyP(10, 100), [bar(D, '17:05:00', { l: 99.98, v: 400 })], placed)?.atIso).toBe(iso(D, '17:05:00'));
+  });
+});

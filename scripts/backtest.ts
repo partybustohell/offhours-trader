@@ -564,6 +564,7 @@ export function writeReport(tag: string, opts: { tbillAnnualRate?: number } = {}
     tag,
     generatedAt: new Date().toISOString(),
     window: { start: WINDOW.start, end: WINDOW.end },
+    minTradesForEconomicClaim: loadConfig().min_trades_for_economic_claim,
     sampleNote:
       plannedR === null
         ? `${nR} R + ${nH} H episodes present (sample.json not found)`

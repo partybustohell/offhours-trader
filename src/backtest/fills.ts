@@ -30,6 +30,11 @@ import type { StoredMinuteBar } from './types.js';
 import { etOffsetForDate } from './data.js';
 
 export const VOLUME_GUARD_MULTIPLE = 20;
+/** Passive resting orders need the market to trade THROUGH by a tick and clear
+ *  a heavier volume guard — the honest cost of queue position (P3 placement). */
+export const PASSIVE_VOLUME_GUARD_MULTIPLE = 40;
+export const PASSIVE_THROUGH_TICKS = 1;
+export const TICK_USD = 0.01;
 export const TAF_PER_SHARE_USD = 0.000195;
 export const TAF_CAP_USD = 9.79;
 /** First trade date on which the 2026 SEC Section 31 rate applies. */
@@ -44,6 +49,15 @@ export interface FillOrderSpec {
   side: 'buy' | 'sell';
   qty: number;
   limitPrice: number;
+  /**
+   * Marketable (default true) reproduces the strict-cross model: the bar
+   * trades to the far side of the limit (buy: low < L). Passive (false)
+   * models a resting order that only fills when the market trades THROUGH it
+   * by a tick (buy: low < L - tick) and requires the heavier passive volume
+   * guard. Live entries are marketable; this flag exists for the P3
+   * semi-passive placement mode and its backtest.
+   */
+  marketable?: boolean;
 }
 
 export interface FillOutcome {
@@ -127,7 +141,10 @@ export function tryFill(
     .filter(({ ms }) => ms >= placedMs + BAR_MS && ms < expiryMs)
     .sort((a, b) => a.ms - b.ms);
 
-  const neededVolume = VOLUME_GUARD_MULTIPLE * order.qty;
+  const marketable = order.marketable !== false;
+  const through = marketable ? 0 : PASSIVE_THROUGH_TICKS * TICK_USD;
+  const neededVolume =
+    (marketable ? VOLUME_GUARD_MULTIPLE : PASSIVE_VOLUME_GUARD_MULTIPLE) * order.qty;
   const cumVolumeBySession = new Map<Session, number>();
 
   for (const { bar } of eligible) {
@@ -136,7 +153,9 @@ export function tryFill(
     cumVolumeBySession.set(session, cum);
 
     const crosses =
-      order.side === 'buy' ? bar.l < order.limitPrice : bar.h > order.limitPrice;
+      order.side === 'buy'
+        ? bar.l < order.limitPrice - through
+        : bar.h > order.limitPrice + through;
     if (!crosses || cum < neededVolume) continue;
 
     const feesUsd =
