@@ -9,14 +9,7 @@ import { candidatesPath, thesisPath, verdictsPath, writeJsonAtomic } from './pat
 import { buildCandidates, type TickerMarketInfo } from './candidates.js';
 import { computeThesisEntries, thesisExpiry, rthThesisExpiry } from './synthesis.js';
 import { computeRegime, NEUTRAL_REGIME } from './regime.js';
-import {
-  amihudIlliquidity,
-  dailyReturns,
-  gapSignature,
-  momentumPct,
-  pctOf52wHigh,
-  recentReturnPct,
-} from './signals.js';
+import { computeTickerFeatures, dailyReturns } from './signals.js';
 import type { ThesisKind } from './types.js';
 import type { BrokerClient } from './broker/client.js';
 import { AlpacaBroker } from './broker/client.js';
@@ -149,19 +142,9 @@ export async function runPipeline(deps: PipelineDeps = {}): Promise<Thesis> {
     if (bars.length === 0) continue;
     const key = sym.toUpperCase();
     const closes = bars.map((b) => b.c);
-    const opens = bars.map((b) => b.o);
-    const vols = bars.map((b) => b.v);
     const mi: TickerMarketInfo =
       enrichedInfo.get(key) ?? { lastPrice: closes[closes.length - 1] ?? 0, avgDollarVolume20d: 0 };
-    mi.recentReturnPct = recentReturnPct(closes, cfg.signals.anti_chase.lookback_days);
-    mi.amihudIlliquidity = amihudIlliquidity(closes, vols, cfg.signals.amihud.window_days);
-    mi.momentumPct = momentumPct(closes, cfg.signals.trend_gate.lookback_days, cfg.signals.trend_gate.skip_days);
-    mi.pctOf52wHigh = pctOf52wHigh(closes, cfg.signals.trend_gate.lookback_days);
-    const g = gapSignature(opens, closes, vols);
-    if (g) {
-      mi.gapPct = g.gapPct;
-      mi.gapRelVolume = g.relVolume;
-    }
+    Object.assign(mi, computeTickerFeatures(bars, cfg));
     enrichedInfo.set(key, mi);
     returnsByTicker.set(key, dailyReturns(closes));
   }

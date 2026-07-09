@@ -99,6 +99,40 @@ export function gapSignature(
   };
 }
 
+/** The per-name signal features carried on TickerMarketInfo. */
+export interface TickerFeatures {
+  recentReturnPct?: number;
+  amihudIlliquidity?: number;
+  momentumPct?: number;
+  pctOf52wHigh?: number;
+  gapPct?: number;
+  gapRelVolume?: number;
+}
+
+/**
+ * Compute all per-name signal features from a name's daily bars (oldest→newest,
+ * already sliced AS-OF the decision day — the caller must not pass future bars).
+ * Shared by the production pipeline and the backtest driver so enrichment is
+ * identical. Windows come from config. Pure.
+ */
+export function computeTickerFeatures(
+  bars: { o: number; c: number; v: number }[],
+  cfg: Config,
+): TickerFeatures {
+  const closes = bars.map((b) => b.c);
+  const opens = bars.map((b) => b.o);
+  const volumes = bars.map((b) => b.v);
+  const gap = gapSignature(opens, closes, volumes);
+  return {
+    recentReturnPct: recentReturnPct(closes, cfg.signals.anti_chase.lookback_days),
+    amihudIlliquidity: amihudIlliquidity(closes, volumes, cfg.signals.amihud.window_days),
+    momentumPct: momentumPct(closes, cfg.signals.trend_gate.lookback_days, cfg.signals.trend_gate.skip_days),
+    pctOf52wHigh: pctOf52wHigh(closes, cfg.signals.trend_gate.lookback_days),
+    gapPct: gap?.gapPct,
+    gapRelVolume: gap?.relVolume,
+  };
+}
+
 // ---------- down-only size scalars (return <= 1; 1 when off / no signal) ----------
 
 /** Sample standard deviation; 0 for <2 points. */

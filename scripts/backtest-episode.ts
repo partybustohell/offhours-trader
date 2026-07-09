@@ -47,6 +47,8 @@ import { riskCheck, type RiskContext } from '../src/risk.js';
 import { runTick, seedDeployedTodayUsd } from '../src/executor-loop.js';
 import { computeThesisEntries, thesisExpiry } from '../src/synthesis.js';
 import { realizedVolAnnualized } from '../src/candidates.js';
+import { computeTickerFeatures, dailyReturns } from '../src/signals.js';
+import { NEUTRAL_REGIME, computeRegime } from '../src/regime.js';
 import { loadDailyBars } from '../src/backtest/data.js';
 import { writeNarratives } from '../src/agents/narrative.js';
 import type { LlmClient } from '../src/agents/llm.js';
@@ -410,22 +412,42 @@ export async function runEpisode(
   // Backfill realized vol from the cached IEX daily bars (prep files predate
   // the vol field). No LLM cost — vol is pure math over stored bars. This is
   // what production's marketInfoFor now computes inline.
+  // As-of-D IEX daily bars (never future) drive vol, the P1-P3 signal features,
+  // and the per-ticker return series for the whole-book portfolio pass — the
+  // same inputs production's pipeline enriches, so signal toggles actually move
+  // backtest results (docs/QUANT-TESTING-PLAN.md Stage 1).
+  const asOfBars = (ticker: string) =>
+    loadDailyBars('iex', ticker).filter((b) => b.t.slice(0, 10) <= day);
+  const returnsByTicker = new Map<string, number[]>();
   const marketInfo = new Map<string, TickerMarketInfo>(
     Object.entries(prep.marketInfo).map(([k, v]) => {
       const ticker = k.toUpperCase();
-      if (v.realizedVolAnnualized === undefined) {
-        const closes = loadDailyBars('iex', ticker)
-          .filter((b) => b.t.slice(0, 10) <= day)
-          .slice(-20)
-          .map((b) => b.c);
-        const vol = realizedVolAnnualized(closes);
-        if (vol !== undefined) return [ticker, { ...v, realizedVolAnnualized: vol }];
-      }
-      return [ticker, v];
+      const bars = asOfBars(ticker);
+      const closes = bars.map((b) => b.c);
+      if (closes.length >= 2) returnsByTicker.set(ticker, dailyReturns(closes));
+      const vol = v.realizedVolAnnualized ?? realizedVolAnnualized(closes.slice(-20));
+      return [
+        ticker,
+        {
+          ...v,
+          ...(vol !== undefined ? { realizedVolAnnualized: vol } : {}),
+          ...computeTickerFeatures(bars, cfg),
+        },
+      ];
     }),
   );
+  // Market regime as-of D from SPY closes (neutral if SPY bars aren't cached).
+  const spyCloses = asOfBars('SPY').map((b) => b.c);
+  const regime = spyCloses.length > 1 ? computeRegime(spyCloses, cfg.regime) : NEUTRAL_REGIME;
   const account = await ledger.getAccount();
-  const computed = computeThesisEntries(prep.verdicts.verdicts, marketInfo, account, cfg);
+  const computed = computeThesisEntries(
+    prep.verdicts.verdicts,
+    marketInfo,
+    account,
+    cfg,
+    regime,
+    returnsByTicker,
+  );
   const abstained = computed.entries.length === 0;
   const narratives = await writeNarratives(cfg, computed.entries, prep.verdicts.verdicts, llm);
   // pipeline.ts entry assembly: narrative + invalidationConditions override
@@ -653,6 +675,7 @@ export async function runEpisode(
   const result: EpisodeResult = {
     day,
     stratum: args.stratum,
+    regimeState: regime.state,
     trades,
     abstained,
     ordersPlaced: ledger.allOrders().length,

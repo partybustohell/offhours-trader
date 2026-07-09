@@ -15,6 +15,7 @@ import {
   costScalar,
   combineScalars,
   attributeScalars,
+  computeTickerFeatures,
   trendContraBlock,
   gapContraBlock,
   drawdownThrottle,
@@ -347,6 +348,30 @@ describe('combineScalars', () => {
 
   it('a floor of 0 lets the product through unclamped', () => {
     expect(combineScalars([0.1, 0.1], 0)).toBeCloseTo(0.01, 10);
+  });
+});
+
+describe('computeTickerFeatures (shared pipeline/backtest enrichment)', () => {
+  const c = ConfigSchema.parse({});
+  it('computes short-window features; long-window ones stay undefined at few bars', () => {
+    const bars = Array.from({ length: 30 }, (_, i) => ({ o: 100 + i, c: 100 + i, v: 1_000_000 }));
+    const f = computeTickerFeatures(bars, c);
+    expect(f.recentReturnPct).toBeCloseTo(((129 - 124) / 124) * 100, 6); // 5d lookback
+    expect(f.amihudIlliquidity).toBeGreaterThan(0); // 20d window -> defined at 30 bars
+    expect(f.pctOf52wHigh).toBeCloseTo(1, 10); // last close is the max
+    expect(f.momentumPct).toBeUndefined(); // needs 253 bars
+    expect(f.gapPct).toBeCloseTo(((129 - 128) / 128) * 100, 6); // lastOpen vs prevClose
+    expect(f.gapRelVolume).toBeCloseTo(1, 6); // uniform volume
+  });
+  it('empty bars -> all features undefined', () => {
+    expect(computeTickerFeatures([], c)).toEqual({
+      recentReturnPct: undefined,
+      amihudIlliquidity: undefined,
+      momentumPct: undefined,
+      pctOf52wHigh: undefined,
+      gapPct: undefined,
+      gapRelVolume: undefined,
+    });
   });
 });
 

@@ -30,6 +30,9 @@ export interface EpisodeTrade {
 export interface EpisodeResult {
   day: string; // YYYY-MM-DD (thesis day D)
   stratum: 'R' | 'H';
+  /** As-of-D market regime state label (regime.ts computeRegime().state);
+   *  optional so pre-existing episode files stay valid. */
+  regimeState?: string;
   trades: EpisodeTrade[];
   abstained: boolean; // empty thesis for day D
   ordersPlaced: number;
@@ -237,6 +240,43 @@ export function deflatedSharpe(
   sharpeStd = 1,
 ): number {
   return probabilisticSharpe(observedSR, expectedMaxSharpe(nTrials, sharpeStd), nObs, skew, kurt);
+}
+
+export interface SampleMoments {
+  mean: number;
+  std: number; // population std (÷ n)
+  skew: number;
+  kurt: number; // full fourth moment (3 = Gaussian)
+  n: number;
+}
+
+/** Mean, population std, skewness, and kurtosis of a series. */
+export function sampleMoments(xs: readonly number[]): SampleMoments {
+  const n = xs.length;
+  if (n < 2) return { mean: n === 1 ? xs[0]! : 0, std: 0, skew: 0, kurt: 3, n };
+  const mean = xs.reduce((s, x) => s + x, 0) / n;
+  const m2 = xs.reduce((s, x) => s + (x - mean) ** 2, 0) / n;
+  const m3 = xs.reduce((s, x) => s + (x - mean) ** 3, 0) / n;
+  const m4 = xs.reduce((s, x) => s + (x - mean) ** 4, 0) / n;
+  const std = Math.sqrt(m2);
+  return {
+    mean,
+    std,
+    skew: std > 0 ? m3 / std ** 3 : 0,
+    kurt: std > 0 ? m4 / std ** 4 : 3,
+    n,
+  };
+}
+
+/**
+ * Deflated Sharpe over a per-observation net series (e.g. per-episode net P&L),
+ * correcting for nTrials and the series' skew/kurtosis. Sharpe is
+ * per-observation (unannualized). null if <2 obs or zero variance.
+ */
+export function deflatedSharpeFromSeries(series: readonly number[], nTrials: number): number | null {
+  const m = sampleMoments(series);
+  if (m.n < 2 || m.std <= 0) return null;
+  return deflatedSharpe(m.mean / m.std, nTrials, m.skew, m.kurt, m.n);
 }
 
 // ---------- economics ----------
@@ -496,6 +536,78 @@ export function attribution(episodes: readonly EpisodeResult[]): AttributionRepo
   return { rows, totalTrades: trades.length };
 }
 
+// ---------- signal attribution (paired full-re-run diff) ----------
+
+export interface SignalAttribution {
+  flag: string;
+  /** episodes present in BOTH runs, paired by day. */
+  nPairs: number;
+  /** mean of (signal-on net − baseline net) per episode. */
+  meanMarginalUsd: number;
+  /** bootstrap CI on that mean; null when no paired episodes. */
+  bootstrap: BootstrapCi | null;
+  perEpisodeMarginalUsd: number[];
+}
+
+/**
+ * Marginal effect of a signal, as the PAIRED per-episode net-P&L difference
+ * between the signal-on run and the baseline run (matched by day). This is the
+ * plan's decision metric — the full re-run diff, never per-trade add-back — so
+ * it captures band-tightening, fill-guard, and budget-cascade effects. A CI that
+ * straddles 0 is a KILL (docs/QUANT-TESTING-PLAN.md Stage 2).
+ */
+export function signalAttribution(
+  flag: string,
+  baseline: readonly EpisodeResult[],
+  signalOn: readonly EpisodeResult[],
+  opts: EconomicsOpts = {},
+): SignalAttribution {
+  const baseByDay = new Map(baseline.map((e) => [e.day, episodeNetUsd(e)]));
+  const perEpisodeMarginalUsd: number[] = [];
+  for (const e of signalOn) {
+    const b = baseByDay.get(e.day);
+    if (b !== undefined) perEpisodeMarginalUsd.push(episodeNetUsd(e) - b);
+  }
+  const n = perEpisodeMarginalUsd.length;
+  return {
+    flag,
+    nPairs: n,
+    meanMarginalUsd: n > 0 ? perEpisodeMarginalUsd.reduce((s, x) => s + x, 0) / n : 0,
+    bootstrap: n > 0 ? bootstrapCi(perEpisodeMarginalUsd, opts.draws, opts.seed, opts.level) : null,
+    perEpisodeMarginalUsd,
+  };
+}
+
+// ---------- walk-forward (sequential K-fold, overfit guard) ----------
+
+export interface WalkForwardFold {
+  fold: number;
+  days: string[];
+  economics: StratumEconomics;
+}
+
+/**
+ * Split episodes into K sequential time-ordered folds and report headline
+ * (stratum R) economics per fold. Descriptive overfit guard: a signal that only
+ * "works" in one fold is regime luck, not edge (docs/QUANT-TESTING-PLAN.md).
+ */
+export function walkForward(
+  episodes: readonly EpisodeResult[],
+  k: number,
+  opts: EconomicsOpts = {},
+): WalkForwardFold[] {
+  if (k < 1) throw new Error(`walkForward needs k >= 1: ${k}`);
+  const sorted = [...episodes].sort((a, b) => (a.day < b.day ? -1 : a.day > b.day ? 1 : 0));
+  const size = Math.ceil(sorted.length / k);
+  const folds: WalkForwardFold[] = [];
+  for (let i = 0; i < k; i++) {
+    const slice = sorted.slice(i * size, (i + 1) * size);
+    if (slice.length === 0) continue;
+    folds.push({ fold: i + 1, days: slice.map((e) => e.day), economics: headlineEconomics(slice, opts) });
+  }
+  return folds;
+}
+
 // ---------- bundle ----------
 
 export interface MetricsBundle {
@@ -567,6 +679,12 @@ export interface ReportMeta {
    * prints "INSUFFICIENT N" instead. Omit -> no gate (legacy behavior).
    */
   minTradesForEconomicClaim?: number;
+  /**
+   * Multiple-testing trial count for the deflated-Sharpe gate (the honest count
+   * of alpha trials from the trial registry). When set, the economic bar prints
+   * the deflated Sharpe; the accept gate is DSR > 0.95.
+   */
+  nTrials?: number;
   validity?: Partial<Record<ValidityKey, string>>;
 }
 
@@ -599,7 +717,7 @@ function economicsSection(e: StratumEconomics): string {
   );
 }
 
-function economicsBar(e: StratumEconomics, minTradesForClaim?: number): string {
+function economicsBar(e: StratumEconomics, minTradesForClaim?: number, nTrials?: number): string {
   const c = e.comparison;
   if (e.nEpisodes === 0) return 'NOT EVALUATED — no episodes in stratum R.';
   if (minTradesForClaim !== undefined && e.nTrades < minTradesForClaim) {
@@ -627,6 +745,15 @@ function economicsBar(e: StratumEconomics, minTradesForClaim?: number): string {
     ``,
     `**Economic bar: ${passes ? 'PASSES' : 'FAILS'}** (point estimate; see CI above — at this n the interval, not the point, is the claim).`,
   );
+  if (nTrials !== undefined) {
+    const dsr = deflatedSharpeFromSeries(e.perEpisodeNetUsd, nTrials);
+    lines.push(
+      '',
+      dsr === null
+        ? `- Deflated Sharpe: n/a (needs >= 2 episodes with variance).`
+        : `- Deflated Sharpe (nTrials=${nTrials}, skew/kurt-adjusted): **${dsr.toFixed(3)}** — accept gate is > 0.95. This is the multiple-testing hurdle; a raw pass above does not clear it.`,
+    );
+  }
   return lines.join('\n');
 }
 
@@ -748,7 +875,7 @@ export function renderReport(all: MetricsBundle, meta: ReportMeta = {}): string 
     '',
     '### 1.1 Economic bar',
     '',
-    economicsBar(all.headline, meta.minTradesForEconomicClaim),
+    economicsBar(all.headline, meta.minTradesForEconomicClaim, meta.nTrials),
     '',
     '## 2. H-stratum economics',
     '',

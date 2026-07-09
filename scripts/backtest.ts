@@ -32,6 +32,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import Anthropic from '@anthropic-ai/sdk';
 import { loadConfig, type Config } from '../src/config.js';
+import { alphaTrialCount, loadTrialRegistry } from '../src/trial-registry.js';
 import { buildCandidates } from '../src/candidates.js';
 import { runNominations, type Scans } from '../src/agents/nominate.js';
 import { runVerdicts, type DailyBar } from '../src/agents/verdicts.js';
@@ -60,6 +61,8 @@ import {
   computeAll,
   episodeNetUsd,
   renderReport,
+  signalAttribution,
+  walkForward,
   type EpisodeResult,
   type ReportMeta,
 } from '../src/backtest/metrics.js';
@@ -606,6 +609,7 @@ export function writeReport(tag: string, opts: { tbillAnnualRate?: number } = {}
     generatedAt: new Date().toISOString(),
     window: { start: WINDOW.start, end: WINDOW.end },
     minTradesForEconomicClaim: loadConfig().min_trades_for_economic_claim,
+    nTrials: alphaTrialCount(loadTrialRegistry()),
     sampleNote:
       plannedR === null
         ? `${nR} R + ${nH} H episodes present (sample.json not found)`
@@ -644,6 +648,48 @@ function loadPrices(): PriceTable | undefined {
   return prices;
 }
 
+/** Print per-signal marginal attribution from a `sweep --signals` run. */
+export function attributionsCommand(tag: string): void {
+  const sweepRoot = path.join(tagDir(tag), 'sweep');
+  const baseline = collectEpisodeResults(path.join(sweepRoot, 'baseline'));
+  if (baseline.length === 0) {
+    throw new Error(`no baseline episodes under ${sweepRoot}/baseline — run: backtest.ts sweep --tag ${tag} --signals`);
+  }
+  const cellIds = fs.readdirSync(sweepRoot).filter((d) => d.startsWith('sig-')).sort();
+  console.log(`\nSignal attribution — tag ${tag} (paired vs baseline over ${baseline.length} episodes; KILL if CI straddles 0)`);
+  console.log('| signal | pairs | mean marginal $/ep | 95% CI | verdict |');
+  console.log('|---|---|---|---|---|');
+  for (const cellId of cellIds) {
+    const flag = cellId.replace(/^sig-/, '');
+    const a = signalAttribution(flag, baseline, collectEpisodeResults(path.join(sweepRoot, cellId)));
+    const ci = a.bootstrap ? `[$${a.bootstrap.low.toFixed(2)}, $${a.bootstrap.high.toFixed(2)}]` : 'n/a';
+    const verdict = !a.bootstrap
+      ? 'no data'
+      : a.bootstrap.low > 0
+        ? 'favorable → soak candidate'
+        : a.bootstrap.high < 0
+          ? 'unfavorable → KILL'
+          : 'CI straddles 0 → KILL';
+    console.log(`| ${flag} | ${a.nPairs} | $${a.meanMarginalUsd.toFixed(2)} | ${ci} | ${verdict} |`);
+  }
+}
+
+/** Print sequential K-fold walk-forward headline economics for a tagged run. */
+export function walkForwardCommand(tag: string, k: number, tbill?: number): void {
+  const episodes = collectEpisodeResults(tagDir(tag));
+  if (episodes.length === 0) throw new Error(`no episode results under ${tagDir(tag)}`);
+  const folds = walkForward(episodes, k, { tbillAnnualRate: tbill });
+  console.log(`\nWalk-forward — tag ${tag}, ${folds.length} sequential fold(s), headline stratum R:`);
+  for (const f of folds) {
+    const e = f.economics;
+    console.log(
+      `  fold ${f.fold} (${f.days[0]}..${f.days[f.days.length - 1]}, n=${e.nEpisodes}): ` +
+        `net/ep $${e.netPnlMeanUsd.toFixed(2)}, total $${e.netPnlTotalUsd.toFixed(2)}`,
+    );
+  }
+  console.log('_Descriptive only — a signal that works in one fold and not others is regime luck._');
+}
+
 async function main(): Promise<void> {
   const cmd = process.argv[2];
   if (cmd === 'sample') {
@@ -679,7 +725,19 @@ async function main(): Promise<void> {
     log(`wrote ${file}`);
     return;
   }
-  console.error('usage: tsx scripts/backtest.ts <sample|precompute|run|sweep|report> [flags]');
+  if (cmd === 'attributions') {
+    const tag = flagValue('tag');
+    if (!tag) throw new Error('usage: backtest.ts attributions --tag T (run `sweep --tag T --signals` first)');
+    attributionsCommand(tag);
+    return;
+  }
+  if (cmd === 'walkforward') {
+    const tag = flagValue('tag');
+    if (!tag) throw new Error('usage: backtest.ts walkforward --tag T [--k 3] [--tbill 0.043]');
+    walkForwardCommand(tag, numFlag('k') ?? 3, numFlag('tbill'));
+    return;
+  }
+  console.error('usage: tsx scripts/backtest.ts <sample|precompute|run|sweep|report|attributions|walkforward> [flags]');
   process.exit(1);
 }
 

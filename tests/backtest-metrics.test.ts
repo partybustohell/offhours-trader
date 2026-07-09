@@ -9,6 +9,10 @@ import {
   bootstrapCi,
   computeAll,
   deflatedSharpe,
+  deflatedSharpeFromSeries,
+  sampleMoments,
+  signalAttribution,
+  walkForward,
   designWeightedEstimate,
   episodeNetUsd,
   expectedMaxSharpe,
@@ -448,6 +452,79 @@ describe('multiple-testing discipline (deflated Sharpe)', () => {
       expect(v).toBeLessThanOrEqual(1);
     }
   });
+
+  it('sampleMoments: mean/std/skew/kurt of a symmetric series', () => {
+    const m = sampleMoments([-2, -1, 0, 1, 2]);
+    expect(m.mean).toBeCloseTo(0, 10);
+    expect(m.std).toBeCloseTo(Math.sqrt(2), 10); // population std of [-2..2]
+    expect(m.skew).toBeCloseTo(0, 10); // symmetric
+    expect(m.n).toBe(5);
+    expect(sampleMoments([]).n).toBe(0);
+  });
+
+  it('deflatedSharpeFromSeries: falls with more trials; null on <2 or constant', () => {
+    const good = [3, 5, 4, 6, 5, 4, 5, 6, 4, 5]; // positive mean, low vol -> high Sharpe
+    const few = deflatedSharpeFromSeries(good, 1)!;
+    const many = deflatedSharpeFromSeries(good, 50)!;
+    expect(few).toBeGreaterThan(many);
+    expect(few).toBeGreaterThanOrEqual(0);
+    expect(few).toBeLessThanOrEqual(1);
+    expect(deflatedSharpeFromSeries([5], 1)).toBeNull();
+    expect(deflatedSharpeFromSeries([5, 5, 5], 1)).toBeNull(); // zero variance
+  });
+});
+
+describe('signalAttribution (paired full-re-run diff)', () => {
+  const base = [
+    episode({ day: '2026-01-05', trades: [trade({ pnlUsd: 100 })] }),
+    episode({ day: '2026-01-06', trades: [trade({ pnlUsd: 50 })] }),
+  ];
+  const on = [
+    episode({ day: '2026-01-05', trades: [trade({ pnlUsd: 90 })] }),
+    episode({ day: '2026-01-06', trades: [trade({ pnlUsd: 40 })] }),
+  ];
+
+  it('pairs by day and reports the mean marginal with a bootstrap CI', () => {
+    const a = signalAttribution('signals.amihud', base, on, { seed: 42 });
+    expect(a.flag).toBe('signals.amihud');
+    expect(a.nPairs).toBe(2);
+    expect(a.perEpisodeMarginalUsd).toEqual([-10, -10]); // signal-on minus baseline
+    expect(a.meanMarginalUsd).toBeCloseTo(-10, 10);
+    expect(a.bootstrap).toMatchObject({ low: -10, high: -10 }); // degenerate constant
+  });
+
+  it('only pairs days present in BOTH runs; no overlap -> null bootstrap', () => {
+    const a = signalAttribution('x', base, [episode({ day: '2026-02-02', trades: [trade({ pnlUsd: 5 })] })]);
+    expect(a.nPairs).toBe(0);
+    expect(a.bootstrap).toBeNull();
+  });
+});
+
+describe('walkForward (sequential K-fold)', () => {
+  const eps = ['2026-01-05', '2026-01-06', '2026-02-03', '2026-03-09'].map((day, i) =>
+    episode({ day, trades: [trade({ pnlUsd: 10 * (i + 1) })] }),
+  );
+
+  it('splits time-ordered episodes into K folds with per-fold headline economics', () => {
+    const folds = walkForward(eps, 2, { seed: 42 });
+    expect(folds).toHaveLength(2);
+    expect(folds[0]!.days).toEqual(['2026-01-05', '2026-01-06']);
+    expect(folds[1]!.days).toEqual(['2026-02-03', '2026-03-09']);
+    expect(folds[0]!.economics.nEpisodes).toBe(2);
+    expect(folds[0]!.economics.netPnlTotalUsd).toBe(30); // 10 + 20
+    expect(folds[1]!.economics.netPnlTotalUsd).toBe(70); // 30 + 40
+  });
+
+  it('sorts by day regardless of input order and rejects k < 1', () => {
+    const shuffled = [eps[2]!, eps[0]!, eps[3]!, eps[1]!];
+    expect(walkForward(shuffled, 1)[0]!.days).toEqual([
+      '2026-01-05',
+      '2026-01-06',
+      '2026-02-03',
+      '2026-03-09',
+    ]);
+    expect(() => walkForward(eps, 0)).toThrow(/k >= 1/);
+  });
 });
 
 describe('economic-claim min-N gate', () => {
@@ -464,6 +541,13 @@ describe('economic-claim min-N gate', () => {
   it('emits the verdict when the floor is met and when no floor is set', () => {
     expect(renderReport(bundle, { minTradesForEconomicClaim: 5 })).toContain('**Economic bar: PASSES**');
     expect(renderReport(bundle, {})).toContain('**Economic bar: PASSES**');
+  });
+
+  it('prints the deflated-Sharpe gate when nTrials is set, and omits it otherwise', () => {
+    const withGate = renderReport(bundle, { nTrials: 7 });
+    expect(withGate).toContain('Deflated Sharpe (nTrials=7');
+    expect(withGate).toContain('accept gate is > 0.95');
+    expect(renderReport(bundle, {})).not.toContain('Deflated Sharpe');
   });
 });
 
