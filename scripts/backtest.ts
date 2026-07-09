@@ -478,6 +478,7 @@ export async function sweepCommand(
   signalThreshold = 0.55,
   feedOverride?: 'iex' | 'sip',
   noBlackout = false,
+  budgetLimit = SWEEP_BUDGET_LIMIT,
 ): Promise<void> {
   const sample = loadSample();
   // The backtest tick loop selects its QUOTE feed from BACKTEST_QUOTE_FEED
@@ -538,17 +539,17 @@ export async function sweepCommand(
   let budgetTotal = judgeTotal(cells) + arm2Calls;
   console.log(
     `\nFRESH-CALL BUDGET: judge-cache misses ${judgeTotal(cells)} across ${cells.length} cells ` +
-      `+ probe arm 2 ${arm2Calls} (2 x traded pairs) = ${budgetTotal} (limit ${SWEEP_BUDGET_LIMIT}; ` +
+      `+ probe arm 2 ${arm2Calls} (2 x traded pairs) = ${budgetTotal} (limit ${budgetLimit}; ` +
       `non-judge misses ${otherMisses} reported, not budgeted)`,
   );
-  if (budgetTotal > SWEEP_BUDGET_LIMIT && mode === 'threshold') {
+  if (budgetTotal > budgetLimit && mode === 'threshold') {
     cells = cells.filter((c) => c.threshold >= SWEEP_THRESHOLD_FLOOR);
     budgetTotal = judgeTotal(cells) + arm2Calls;
     console.log(
-      `budget over ${SWEEP_BUDGET_LIMIT}: threshold floor raised to ${SWEEP_THRESHOLD_FLOOR} ` +
+      `budget over ${budgetLimit}: threshold floor raised to ${SWEEP_THRESHOLD_FLOOR} ` +
         `(pre-registered rule) -> ${cells.length} cells, budget ${budgetTotal}`,
     );
-    if (budgetTotal > SWEEP_BUDGET_LIMIT) {
+    if (budgetTotal > budgetLimit) {
       console.error('budget still exceeds the limit after the pre-registered floor — aborting sweep');
       process.exitCode = 1;
       return;
@@ -556,9 +557,9 @@ export async function sweepCommand(
   }
   // Signal mode shares cached LLM inputs across cells, so fresh calls should be
   // ~baseline; if they aren't, abort rather than make unbudgeted live API calls.
-  if (budgetTotal > SWEEP_BUDGET_LIMIT && mode === 'signals') {
+  if (budgetTotal > budgetLimit && mode === 'signals') {
     console.error(
-      `signal-sweep fresh-call budget ${budgetTotal} exceeds ${SWEEP_BUDGET_LIMIT} — aborting to avoid ` +
+      `signal-sweep fresh-call budget ${budgetTotal} exceeds ${budgetLimit} — aborting to avoid ` +
         `unbudgeted live API calls. Populate the cache (run the baseline config first) or cut episodes.`,
     );
     process.exitCode = 1;
@@ -760,6 +761,7 @@ async function main(): Promise<void> {
       numFlag('threshold') ?? 0.55,
       flagValue('feed') === 'sip' ? 'sip' : flagValue('feed') === 'iex' ? 'iex' : undefined,
       hasFlag('no-blackout'),
+      numFlag('budget-limit'),
     );
     return;
   }
