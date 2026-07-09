@@ -8,6 +8,7 @@
     "tick": "tsx src/executor-loop.ts",
     "serve": "tsx src/server.ts",
     "seed": "tsx scripts/seed-demo.ts",
+    "preflight": "tsx scripts/preflight.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "build:frontend": "cd frontend && pnpm install && pnpm build"
