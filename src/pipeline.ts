@@ -120,11 +120,17 @@ export async function runPipeline(deps: PipelineDeps = {}): Promise<Thesis> {
   const candidateTickers = candidateFile.candidates.map((c) => c.ticker);
   // ~260 daily bars so the P3 momentum / 52-week-high features have history;
   // ADV and realized vol stay on their trailing-20 windows inside marketInfoFor.
-  const [barsBySymbol, candidateNews, spyBarsMap] = await Promise.all([
+  const [featureBarsBySymbol, candidateNews, spyBarsMap] = await Promise.all([
     md.getDailyBars(candidateTickers, 260),
     md.getNews(50, candidateTickers),
     md.getDailyBars(['SPY'], 260),
   ]);
+  // The analyst summarizer (verdicts.ts summarizeBars) reduces high/low/avgVolume
+  // over its WHOLE bar array into the LLM prompt, so it MUST see only the trailing
+  // 25 bars (the historical default) — the 260-bar history is used ONLY for the
+  // deterministic features and must never leak the 52-week extremes back into the
+  // prompt. This keeps the verdict prompt byte-identical to before.
+  const barsBySymbol = new Map([...featureBarsBySymbol].map(([sym, bars]) => [sym, bars.slice(-25)]));
   const verdictFile = await runVerdicts(
     cfg,
     candidateFile,
@@ -132,14 +138,14 @@ export async function runPipeline(deps: PipelineDeps = {}): Promise<Thesis> {
     deps.llm,
   );
 
-  // Enrich market info with per-name signal features from the candidate bars,
-  // and build the per-ticker return series for the whole-book portfolio pass.
-  // Features are computed unconditionally (cheap) and consumed only by enabled
-  // signals; all P1-P3 signals ship flag-off, so this changes nothing yet.
+  // Enrich market info with per-name signal features from the FULL candidate-bar
+  // history, and build the per-ticker return series for the whole-book portfolio
+  // pass. Features are computed unconditionally (cheap) and consumed only by
+  // enabled signals; all P1-P3 signals ship flag-off, so this changes nothing yet.
   const enrichedInfo = new Map<string, TickerMarketInfo>();
   for (const [t, mi] of marketInfo) enrichedInfo.set(t.toUpperCase(), { ...mi });
   const returnsByTicker = new Map<string, number[]>();
-  for (const [sym, bars] of barsBySymbol) {
+  for (const [sym, bars] of featureBarsBySymbol) {
     if (bars.length === 0) continue;
     const key = sym.toUpperCase();
     const closes = bars.map((b) => b.c);

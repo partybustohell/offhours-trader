@@ -107,4 +107,19 @@ describe('calibratedConviction', () => {
     expect(calibratedConviction(0.25, cal)).toBeCloseTo(0.25, 10);
     expect(calibratedConviction(0.5, cal)).toBeCloseTo(0.5, 12);
   });
+
+  it('clamps the calibrated conviction to [0,1] so it can never inflate a position', () => {
+    // Defense-in-depth: even a mis-fit table with prob>1 must not exceed 1.
+    const bad: Config['calibration'] = { ...baseCal, enabled: true, table: [{ score: 0, prob: 0.5 }, { score: 0.9, prob: 1.5 }] };
+    expect(calibratedConviction(0.9, bad)).toBe(1);
+    expect(calibratedConviction(1.0, bad)).toBe(1);
+  });
+});
+
+describe('ConfigSchema rejects an out-of-range calibration prob', () => {
+  it('rejects prob above 1 and below 0, accepts a valid [0,1] prob', () => {
+    expect(() => ConfigSchema.parse({ calibration: { table: [{ score: 0.9, prob: 1.3 }] } })).toThrow();
+    expect(() => ConfigSchema.parse({ calibration: { table: [{ score: 0.9, prob: -0.1 }] } })).toThrow();
+    expect(() => ConfigSchema.parse({ calibration: { table: [{ score: 0.9, prob: 0.7 }] } })).not.toThrow();
+  });
 });

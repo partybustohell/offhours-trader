@@ -262,8 +262,10 @@ export const ConfigSchema = z.object({
     .object({
       enabled: z.boolean().default(false),
       min_trades: z.number().int().min(0).default(50),
-      // sorted (score,winProb) breakpoints; empty -> identity map.
-      table: z.array(z.object({ score: z.number(), prob: z.number() })).default([]),
+      // sorted (score,winProb) breakpoints; empty -> identity map. prob is a
+      // win PROBABILITY in [0,1] — bounding it keeps calibrated conviction <=1
+      // so it can never inflate a position past the per-position cap.
+      table: z.array(z.object({ score: z.number(), prob: z.number().min(0).max(1) })).default([]),
     })
     .default({}),
   model: z

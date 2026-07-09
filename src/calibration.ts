@@ -40,5 +40,7 @@ export function applyCalibration(score: number, table: CalibrationPoint[]): numb
  */
 export function calibratedConviction(score: number, cfg: Config['calibration']): number {
   if (!cfg.enabled || cfg.table.length === 0) return score;
-  return applyCalibration(score, cfg.table);
+  // Clamp to [0,1] as defense-in-depth: a calibrated conviction must never
+  // exceed 1 (it would inflate a position past the per-position cap).
+  return Math.max(0, Math.min(1, applyCalibration(score, cfg.table)));
 }
