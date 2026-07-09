@@ -475,6 +475,7 @@ export async function sweepCommand(
   offline = false,
   mode: 'threshold' | 'signals' = 'threshold',
   budgetOnly = false,
+  signalThreshold = 0.55,
 ): Promise<void> {
   const sample = loadSample();
   const cfg = loadConfig();
@@ -483,7 +484,7 @@ export async function sweepCommand(
   // 'signals' mode: baseline vs one-signal-on cells (disprove funnel). Signals
   // aren't in the LLM prompt, so all cells share the cached LLM calls -> the
   // fresh-call budget stays ~baseline regardless of cell count.
-  let cells = mode === 'signals' ? signalToggleCells() : sweepCells();
+  let cells = mode === 'signals' ? signalToggleCells(signalThreshold) : sweepCells();
 
   // Fresh-call budget FIRST: canonical judge-cache misses per cell (count-only
   // pass; nothing fetched, nothing persisted) plus probe arm 2 (2 calls per
@@ -736,6 +737,7 @@ async function main(): Promise<void> {
       hasFlag('offline'),
       hasFlag('signals') ? 'signals' : 'threshold',
       hasFlag('budget-only'),
+      numFlag('threshold') ?? 0.55,
     );
     return;
   }
