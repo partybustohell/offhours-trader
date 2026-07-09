@@ -476,9 +476,12 @@ export async function sweepCommand(
   mode: 'threshold' | 'signals' = 'threshold',
   budgetOnly = false,
   signalThreshold = 0.55,
+  feedOverride?: 'iex' | 'sip',
 ): Promise<void> {
   const sample = loadSample();
-  const cfg = loadConfig();
+  // Feed override (does NOT touch config.yaml): IEX quotes are too thin in this
+  // window to fill, so a signal sweep needs SIP to have a trading baseline.
+  const cfg = feedOverride ? { ...loadConfig(), data_feed: feedOverride } : loadConfig();
   const episodes = sample.episodes.filter((e) => fileExists(prepPath(e.day)));
   if (episodes.length === 0) throw new Error('no prep files found — run precompute first');
   // 'signals' mode: baseline vs one-signal-on cells (disprove funnel). Signals
@@ -738,6 +741,7 @@ async function main(): Promise<void> {
       hasFlag('signals') ? 'signals' : 'threshold',
       hasFlag('budget-only'),
       numFlag('threshold') ?? 0.55,
+      flagValue('feed') === 'sip' ? 'sip' : flagValue('feed') === 'iex' ? 'iex' : undefined,
     );
     return;
   }
