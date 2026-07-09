@@ -7,6 +7,19 @@ export interface TickerMarketInfo {
   /** Annualized close-to-close realized vol; used for risk-parity sizing.
    *  Optional so callers/data without it degrade to no vol scaling. */
   realizedVolAnnualized?: number;
+  // Optional P1–P3 signal features from the name's daily bars. All optional so
+  // callers/data without them leave the corresponding signal inert.
+  /** Signed % return over the anti-chase lookback window. */
+  recentReturnPct?: number;
+  /** Amihud illiquidity (mean |ret|/$vol × 1e6). */
+  amihudIlliquidity?: number;
+  /** 12-1 style momentum (% return, skipping the most recent weeks). */
+  momentumPct?: number;
+  /** Last close as a fraction of the trailing 52-week high. */
+  pctOf52wHigh?: number;
+  /** Overnight gap % and relative volume from the most recent daily bar. */
+  gapPct?: number;
+  gapRelVolume?: number;
 }
 
 /**
@@ -73,10 +86,14 @@ export function buildCandidates(
     });
   }
 
+  // Rank by nomination count, then dollar volume. Optional low-vol tiebreak
+  // (P3, flag-off) prefers calmer names among otherwise-equal candidates.
+  const volOf = (t: string): number => info.get(t.toUpperCase())?.realizedVolAnnualized ?? Infinity;
   surviving.sort(
     (a, b) =>
       b.nominatedBy.length - a.nominatedBy.length ||
-      b.avgDollarVolume20d - a.avgDollarVolume20d,
+      b.avgDollarVolume20d - a.avgDollarVolume20d ||
+      (cfg.signals.low_vol.prefer_low_vol ? volOf(a.ticker) - volOf(b.ticker) : 0),
   );
   const candidates = surviving.slice(0, cfg.universe.max_candidates);
   for (const overflow of surviving.slice(cfg.universe.max_candidates)) {

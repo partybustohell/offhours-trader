@@ -6,10 +6,11 @@ import type { ProposedOrder, QuoteSnapshot, Thesis, ThesisKind } from './types.j
 import type { Config } from './config.js';
 import { loadConfig } from './config.js';
 import { currentSession, nowET, sessionEnabled } from './clock.js';
-import { entryTimingAllowed } from './session-risk.js';
+import { entryTimingAllowed, sessionGate } from './session-risk.js';
+import { costScalar, drawdownThrottle, participationQty, riskOffTriggered } from './signals.js';
 import { appendAudit } from './audit.js';
 import { ensureOut, OUT_DIR, readJsonIfExists, thesisPath } from './paths.js';
-import { readHaltState, writeHalt } from './state.js';
+import { readHaltState, updatePeakEquity, writeHalt } from './state.js';
 import { riskCheck, type RiskContext } from './risk.js';
 import type { BrokerClient } from './broker/client.js';
 import { AlpacaBroker } from './broker/client.js';
@@ -109,10 +110,17 @@ export function entryLimitPrice(
   direction: 'long' | 'short',
   quote: { bid: number; ask: number },
   band: { low: number; high: number },
+  aggressiveness = 1,
 ): number {
-  return direction === 'long'
-    ? Math.floor(Math.min(quote.ask, band.high) * 100) / 100
-    : Math.ceil(Math.max(quote.bid, band.low) * 100) / 100;
+  // aggressiveness 1 = marketable (take the far side, clamped to the band) —
+  // the historical behavior. <1 rests inside the spread by that fraction.
+  const a = Math.max(0, Math.min(1, aggressiveness));
+  if (direction === 'long') {
+    const target = a >= 1 ? quote.ask : quote.bid + a * (quote.ask - quote.bid);
+    return Math.floor(Math.min(target, band.high) * 100) / 100;
+  }
+  const target = a >= 1 ? quote.bid : quote.ask - a * (quote.ask - quote.bid);
+  return Math.ceil(Math.max(target, band.low) * 100) / 100;
 }
 
 export async function runTick(deps: TickDeps = {}): Promise<void> {
@@ -146,6 +154,34 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
   if (!halt.halted && dailyPl <= -((account.equity * cfg.daily_loss_halt_pct) / 100)) {
     halt = writeHalt('daily loss halt', now);
     appendAudit({ kind: 'halt', data: { reason: 'daily loss halt', dailyPl, equity: account.equity } });
+  }
+
+  // Book-level overlays (P2, flag-off by default -> throttle 1, no freeze) and
+  // the session-calibrated pre-trade gate (SIP-only; flat on IEX).
+  const peak = updatePeakEquity(account.equity, now);
+  const ddThrottle = drawdownThrottle(account.equity, peak, cfg.risk_overlay.drawdown_throttle);
+  const gate = sessionGate(session, cfg);
+
+  let riskOffFreeze = false;
+  if (cfg.risk_overlay.risk_off.enabled) {
+    try {
+      const [spyQuotes, spyBarsMap] = await Promise.all([
+        md.getLatestQuotes(['SPY']),
+        md.getDailyBars(['SPY'], 3),
+      ]);
+      const spyQuote = spyQuotes[0];
+      const spyBars = spyBarsMap.get('SPY') ?? [];
+      const ref = spyBars.length >= 2 ? spyBars[spyBars.length - 2]!.c : spyBars[spyBars.length - 1]?.c;
+      if (spyQuote && ref && ref > 0) {
+        const dropPct = (((spyQuote.bid + spyQuote.ask) / 2 - ref) / ref) * 100;
+        riskOffFreeze = riskOffTriggered(dropPct, cfg.risk_overlay.risk_off);
+        if (riskOffFreeze) {
+          appendAudit({ kind: 'tick', data: { stage: 'risk_off', session, dropPct: Math.round(dropPct * 100) / 100 } });
+        }
+      }
+    } catch {
+      // SPY fetch failure -> no freeze (overlay fails open; core risk gates still apply).
+    }
   }
 
   const todayYmd = nowET(now).ymd;
@@ -182,7 +218,7 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
   // relative to the tick clock. Dropped quotes fall through the existing "no
   // quote" skip, so the executor never trades on a stale book — this is what
   // makes the free IEX feed SAFE to run in the deep off-hours it cannot see.
-  const { fresh, stale } = partitionFreshQuotes(quotes, now.getTime(), cfg.max_quote_age_sec);
+  const { fresh, stale } = partitionFreshQuotes(quotes, now.getTime(), gate.maxQuoteAgeSec);
   if (stale > 0) {
     appendAudit({
       kind: 'tick',
@@ -203,6 +239,7 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
     deployedTodayUsd,
     dailyPl,
     halted: halt.halted,
+    riskOffFreeze,
   });
 
   const summary = {
@@ -347,11 +384,11 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
     }
     const mid = (quote.ask + quote.bid) / 2;
     const spreadBps = mid > 0 ? ((quote.ask - quote.bid) / mid) * 10000 : Infinity;
-    if (spreadBps > cfg.max_spread_bps) {
-      skip(ticker, `spread ${Math.round(spreadBps)} bps exceeds max_spread_bps`);
+    if (spreadBps > gate.maxSpreadBps) {
+      skip(ticker, `spread ${Math.round(spreadBps)} bps exceeds ${Math.round(gate.maxSpreadBps)} bps gate`);
       continue;
     }
-    if (quote.bidSize < 1 || quote.askSize < 1) {
+    if (quote.bidSize < gate.minTopSize || quote.askSize < gate.minTopSize) {
       skip(ticker, 'insufficient quote size');
       continue;
     }
@@ -364,8 +401,23 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
       skip(ticker, `judge declined: ${decision.reasons.join('; ') || 'no reason given'}`);
       continue;
     }
-    const limitPrice = entryLimitPrice(entry.direction, quote, entry.limitBand);
-    const qty = Math.floor(entry.targetNotionalUsd / limitPrice);
+    const limitPrice = entryLimitPrice(
+      entry.direction,
+      quote,
+      entry.limitBand,
+      cfg.execution.entry_aggressiveness,
+    );
+    // Down-only execution + book scalars on the notional (all default to 1):
+    // cost scalar (live spread), drawdown throttle (book), then a participation
+    // cap on qty vs displayed take-side size.
+    const adjustedNotional =
+      entry.targetNotionalUsd * costScalar(spreadBps, cfg.execution.cost_scalar) * ddThrottle;
+    const takeSize = entry.direction === 'long' ? quote.askSize : quote.bidSize;
+    const qty = participationQty(
+      Math.floor(adjustedNotional / limitPrice),
+      takeSize,
+      cfg.execution.participation,
+    );
     if (qty < 1) {
       skip(ticker, 'target notional below one share');
       continue;

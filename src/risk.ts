@@ -13,6 +13,9 @@ export interface RiskContext {
   deployedTodayUsd: number;
   dailyPl: number;
   halted: boolean;
+  /** Intraday market risk-off freeze (P2): blocks entries like a halt would;
+   *  exits remain allowed. Undefined/false by default. */
+  riskOffFreeze?: boolean;
 }
 
 /**
@@ -31,6 +34,10 @@ export function riskCheck(order: ProposedOrder, ctx: RiskContext): RiskDecision 
 
   if (isEntry && ctx.halted) {
     reasons.push('trading halted');
+  }
+
+  if (isEntry && ctx.riskOffFreeze) {
+    reasons.push('risk-off freeze');
   }
 
   // Boundary equality trips: losing exactly the threshold halts entries.

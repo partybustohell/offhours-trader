@@ -1,7 +1,30 @@
 import type { HaltState } from './types.js';
-import { statePath, writeJsonAtomic, readJsonIfExists } from './paths.js';
+import { peakPath, statePath, writeJsonAtomic, readJsonIfExists } from './paths.js';
 
 const DEFAULT_STATE: HaltState = { halted: false, reason: '', at: '' };
+
+interface PeakState {
+  peakEquity: number;
+  at: string;
+}
+
+/** High-water-mark equity (0 if never recorded or unreadable). */
+export function readPeakEquity(): number {
+  try {
+    const raw = readJsonIfExists<PeakState>(peakPath());
+    return raw && typeof raw.peakEquity === 'number' && raw.peakEquity > 0 ? raw.peakEquity : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** Raise the high-water mark to `equity` if higher; returns the current peak. */
+export function updatePeakEquity(equity: number, at: Date = new Date()): number {
+  const prev = readPeakEquity();
+  const peak = Math.max(prev, equity);
+  if (peak > prev) writeJsonAtomic(peakPath(), { peakEquity: peak, at: at.toISOString() });
+  return peak;
+}
 
 export function readHaltState(): HaltState {
   let raw: Partial<HaltState> | null;

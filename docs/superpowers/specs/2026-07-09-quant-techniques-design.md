@@ -180,6 +180,22 @@ trades. Every one ships disabled with a pre-registered rule.
 - Conviction calibration & any conviction→edge (Kelly) map need ≥50 OOS closed
   trades — a data-availability gap, not a feed gap.
 
+## Implementation status (2026-07-09)
+
+P0 shipped (enabled, safe-by-construction). **P1–P3 are now all BUILT and wired,
+shipping flag-OFF** — the machinery is deterministic and unit-tested, and every
+signal is disabled by default. New modules: `src/signals.ts` (features + down-only
+scalars + gates), `src/regime.ts` (trend/vol/gross overlay), `src/portfolio.ts`
+(shrinkage covariance, vol targeting, inverse-vol weights), `src/calibration.ts`
+(identity map). Integration: `synthesis.ts` applies calibration → threshold-bump →
+per-name down-only scalars (floored product, volScalar kept separate so legacy
+sizing is byte-identical when off) → gates → whole-book portfolio pass;
+`executor-loop.ts` applies cost scalar, participation cap, drawdown throttle,
+risk-off freeze, session-calibrated gates (SIP-only), and semi-passive placement;
+`pipeline.ts` computes features + market regime from SPY and stores the regime on
+the thesis. Config for every knob is in `ConfigSchema`. **Enabling remains gated
+on the paper soak (≥50 OOS trades); log each trial in `docs/TRIAL-REGISTRY.md`.**
+
 ## Non-goals
 
 Crypto; ML models that can't be deterministically unit-tested; any change to the

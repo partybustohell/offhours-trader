@@ -1,6 +1,20 @@
 import type { AccountSnapshot, ThesisEntry, Verdict } from './types.js';
 import type { Config } from './config.js';
 import type { TickerMarketInfo } from './candidates.js';
+import { NEUTRAL_REGIME, type Regime } from './regime.js';
+import {
+  amihudHaircut,
+  antiChaseHaircut,
+  combineScalars,
+  dispersionScalar,
+  gapContraBlock,
+  isChasing,
+  stddev,
+  trendContraBlock,
+  type GapSignature,
+} from './signals.js';
+import { calibratedConviction } from './calibration.js';
+import { inverseVolWeights, portfolioVolScalar, shrinkageCovariance } from './portfolio.js';
 
 const DAY_MS = 86_400_000;
 
@@ -9,6 +23,11 @@ export function computeThesisEntries(
   marketInfo: Map<string, TickerMarketInfo>,
   account: AccountSnapshot,
   cfg: Config,
+  // Market regime overlay (default neutral -> all scalars 1, no threshold bump).
+  regime: Regime = NEUTRAL_REGIME,
+  // Per-ticker daily return series for the whole-book portfolio pass (P2).
+  // Empty -> the portfolio pass is a no-op.
+  returnsByTicker: Map<string, number[]> = new Map(),
 ): { entries: Omit<ThesisEntry, 'narrative'>[]; skipped: { ticker: string; reason: string }[] } {
   const byTicker = new Map<string, Verdict[]>();
   for (const v of verdicts) {
@@ -64,8 +83,12 @@ export function computeThesisEntries(
       skipped.push({ ticker, reason: 'agreement quorum' });
       continue;
     }
-    const weightedConviction = direction === 'long' ? longScore : shortScore;
-    if (weightedConviction < cfg.conviction_threshold) {
+    // Optional monotone calibration of the raw score (identity by default),
+    // then the regime threshold-bump: a hostile regime demands more conviction
+    // (a discrete gate; neutral regime bump is 0, so unchanged by default).
+    const rawConviction = direction === 'long' ? longScore : shortScore;
+    const weightedConviction = calibratedConviction(rawConviction, cfg.calibration);
+    if (weightedConviction < cfg.conviction_threshold + regime.thresholdBump) {
       skipped.push({ ticker, reason: 'below threshold' });
       continue;
     }
@@ -76,11 +99,29 @@ export function computeThesisEntries(
       continue;
     }
 
+    // Counter-trend and catalyst-gap vetoes (flag-off by default -> never fire).
+    if (trendContraBlock(mi.momentumPct, mi.pctOf52wHigh, direction, cfg.signals.trend_gate)) {
+      skipped.push({ ticker, reason: 'trend gate' });
+      continue;
+    }
+    const gap: GapSignature | undefined =
+      mi.gapPct !== undefined && mi.gapRelVolume !== undefined
+        ? { gapPct: mi.gapPct, relVolume: mi.gapRelVolume }
+        : undefined;
+    if (gapContraBlock(gap, direction, cfg.signals.gap)) {
+      skipped.push({ ticker, reason: 'gap gate' });
+      continue;
+    }
+
     const p = mi.lastPrice;
+    // Anti-chase tightens the CHASE side of the band (flag-off -> unchanged).
+    const chasePct = isChasing(mi.recentReturnPct, direction, cfg.signals.anti_chase)
+      ? cfg.max_chase_pct * (1 - cfg.signals.anti_chase.band_tighten_pct)
+      : cfg.max_chase_pct;
     const limitBand =
       direction === 'long'
-        ? { low: p * (1 - cfg.max_drop_pct / 100), high: p * (1 + cfg.max_chase_pct / 100) }
-        : { low: p * (1 - cfg.max_chase_pct / 100), high: p * (1 + cfg.max_drop_pct / 100) };
+        ? { low: p * (1 - cfg.max_drop_pct / 100), high: p * (1 + chasePct / 100) }
+        : { low: p * (1 - chasePct / 100), high: p * (1 + cfg.max_drop_pct / 100) };
 
     const baseNotional = Math.min(
       cfg.max_order_notional_usd,
@@ -93,8 +134,19 @@ export function computeThesisEntries(
       mi.realizedVolAnnualized && mi.realizedVolAnnualized > 0
         ? Math.min(1, cfg.target_vol_pct / 100 / mi.realizedVolAnnualized)
         : 1;
+    // Down-only signal scalars (each <=1; exactly 1 when disabled), combined
+    // multiplicatively with a floor so stacking can't collapse the position.
+    // volScalar stays SEPARATE so legacy sizing is byte-identical when off.
+    const signalScalars = [
+      antiChaseHaircut(mi.recentReturnPct, direction, cfg.signals.anti_chase),
+      amihudHaircut(mi.amihudIlliquidity, cfg.signals.amihud),
+      dispersionScalar(agreeing.map((v) => v.conviction), cfg.signals.dispersion),
+      direction === 'long' ? regime.longScalar : regime.shortScalar,
+      regime.volScalar,
+    ];
+    const signalProduct = combineScalars(signalScalars, cfg.signal_scalar_floor);
     const targetNotionalUsd =
-      Math.round(baseNotional * weightedConviction * volScalar * 100) / 100;
+      Math.round(baseNotional * weightedConviction * volScalar * signalProduct * 100) / 100;
 
     const invalidationConditions = [
       ...new Set(
@@ -106,6 +158,12 @@ export function computeThesisEntries(
 
     entries.push({ ticker, direction, weightedConviction, limitBand, targetNotionalUsd, invalidationConditions });
   }
+
+  // Whole-book portfolio sizing (P2, flag-off): covariance vol-targeting and/or
+  // inverse-vol reallocation across all entries at once, so it runs after
+  // per-name sizing and before ordering. No-op unless enabled AND per-ticker
+  // return series are supplied.
+  applyPortfolioSizing(entries, returnsByTicker, account.equity, cfg);
 
   // Sizing/portfolio discipline (deterministic, ethos-preserving): this only
   // orders, drops, and caps — it never adds risk or a directional vote.
@@ -144,6 +202,50 @@ export function computeThesisEntries(
   }
 
   return { entries: funded, skipped };
+}
+
+/**
+ * Whole-book portfolio sizing (P2). Mutates each entry's targetNotionalUsd.
+ * No-op unless portfolio.target_vol is enabled or sizing_mode is 'inverse_vol'
+ * AND a daily return series exists for EVERY entry (partial data -> skip, so
+ * the book is never sized on an incomplete covariance). Both adjustments are
+ * bounded by the per-name base notional and are down-only for target-vol.
+ */
+function applyPortfolioSizing(
+  entries: Omit<ThesisEntry, 'narrative'>[],
+  returnsByTicker: Map<string, number[]>,
+  equity: number,
+  cfg: Config,
+): void {
+  const pcfg = cfg.portfolio;
+  const useTargetVol = pcfg.target_vol.enabled;
+  const useInverseVol = pcfg.sizing_mode === 'inverse_vol';
+  if (entries.length === 0 || (!useTargetVol && !useInverseVol)) return;
+
+  const series = entries.map((e) => returnsByTicker.get(e.ticker.toUpperCase()));
+  if (series.some((s) => s === undefined || s.length < 2)) return;
+  const minLen = Math.min(...series.map((s) => s!.length));
+  const aligned = series.map((s) => s!.slice(s!.length - minLen));
+  const baseNotional = Math.min(cfg.max_order_notional_usd, (equity * cfg.max_position_pct) / 100);
+
+  if (useInverseVol) {
+    const sigmas = aligned.map((r) => stddev(r));
+    const weights = inverseVolWeights(sigmas, entries.map((e) => e.weightedConviction));
+    const budget = entries.reduce((s, e) => s + e.targetNotionalUsd, 0);
+    entries.forEach((e, i) => {
+      e.targetNotionalUsd = Math.round(Math.min(baseNotional, budget * weights[i]!) * 100) / 100;
+    });
+  }
+  if (useTargetVol) {
+    const cov = shrinkageCovariance(aligned, pcfg.cov_shrinkage);
+    const weightsUsd = entries.map((e) =>
+      e.direction === 'long' ? e.targetNotionalUsd : -e.targetNotionalUsd,
+    );
+    const scalar = portfolioVolScalar(weightsUsd, cov, pcfg.target_vol.pct, equity);
+    entries.forEach((e) => {
+      e.targetNotionalUsd = Math.round(e.targetNotionalUsd * scalar * 100) / 100;
+    });
+  }
 }
 
 // ET-minus-UTC offset in ms at the given instant, via Intl (DST-safe).

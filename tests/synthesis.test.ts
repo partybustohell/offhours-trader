@@ -287,6 +287,146 @@ describe('computeThesisEntries — priority ordering, floor, and name cap', () =
   });
 });
 
+describe('computeThesisEntries — P1–P3 signals (opt-in, down-only / gate)', () => {
+  const longs3 = (c: number, ticker = 'NVDA'): Verdict[] => [
+    v('fundamental', 'long', c, [], ticker),
+    v('sentiment', 'long', c, [], ticker),
+    v('technical', 'long', c, [], ticker),
+  ];
+  const shorts3 = (c: number, ticker = 'NVDA'): Verdict[] => [
+    v('bear', 'short', c, [], ticker),
+    v('sentiment', 'short', c, [], ticker),
+    v('technical', 'short', c, [], ticker),
+  ];
+  const miWith = (fields: Partial<TickerMarketInfo>, ticker = 'NVDA'): Map<string, TickerMarketInfo> =>
+    new Map([[ticker, { lastPrice: 100, avgDollarVolume20d: 1e9, ...fields }]]);
+  const t50 = { conviction_threshold: 0.5 };
+
+  it('baseline (all signals off): NVDA 0.9 -> 2000*0.9 = 1800', () => {
+    const e = computeThesisEntries(longs3(0.9), miWith({}), account(100_000), cfg(t50)).entries[0]!;
+    expect(e.targetNotionalUsd).toBe(1800);
+  });
+
+  it('anti-chase haircut halves size when the name ran up in the trade direction', () => {
+    const c = cfg({ ...t50, signals: { anti_chase: { enabled: true, run_threshold_pct: 10, haircut: 0.5 } } });
+    const e = computeThesisEntries(longs3(0.9), miWith({ recentReturnPct: 20 }), account(100_000), c).entries[0]!;
+    expect(e.targetNotionalUsd).toBe(900); // 1800 * 0.5
+  });
+
+  it('anti-chase does not fire when the run is below threshold or opposite the trade', () => {
+    const c = cfg({ ...t50, signals: { anti_chase: { enabled: true, run_threshold_pct: 10, haircut: 0.5 } } });
+    const below = computeThesisEntries(longs3(0.9), miWith({ recentReturnPct: 5 }), account(100_000), c).entries[0]!;
+    expect(below.targetNotionalUsd).toBe(1800);
+    const opposite = computeThesisEntries(longs3(0.9), miWith({ recentReturnPct: -20 }), account(100_000), c).entries[0]!;
+    expect(opposite.targetNotionalUsd).toBe(1800);
+  });
+
+  it('the multiplicative floor bounds stacked down-only scalars', () => {
+    // anti-chase 0.5 * amihud 0.5 = 0.25 (> floor 0.2) -> 1800*0.25 = 450.
+    const c = cfg({
+      ...t50,
+      signal_scalar_floor: 0.2,
+      signals: {
+        anti_chase: { enabled: true, run_threshold_pct: 10, haircut: 0.5 },
+        amihud: { enabled: true, max_amihud: 1, size_haircut: 0.5 },
+      },
+    });
+    const e = computeThesisEntries(longs3(0.9), miWith({ recentReturnPct: 20, amihudIlliquidity: 5 }), account(100_000), c).entries[0]!;
+    expect(e.targetNotionalUsd).toBe(450);
+    // With a haircut of 0.1 each, product 0.01 would floor to 0.2 -> 360.
+    const c2 = cfg({
+      ...t50,
+      signal_scalar_floor: 0.2,
+      signals: {
+        anti_chase: { enabled: true, run_threshold_pct: 10, haircut: 0.1 },
+        amihud: { enabled: true, max_amihud: 1, size_haircut: 0.1 },
+      },
+    });
+    const e2 = computeThesisEntries(longs3(0.9), miWith({ recentReturnPct: 20, amihudIlliquidity: 5 }), account(100_000), c2).entries[0]!;
+    expect(e2.targetNotionalUsd).toBe(360); // 1800 * 0.2
+  });
+
+  it('trend gate blocks a short into a strong uptrend', () => {
+    const c = cfg({ ...t50, signals: { trend_gate: { enabled: true, contra_block: true, min_pct_of_52w_high: 0.75 } } });
+    const { entries, skipped } = computeThesisEntries(
+      shorts3(0.9),
+      miWith({ momentumPct: 30, pctOf52wHigh: 0.95 }),
+      account(100_000),
+      c,
+    );
+    expect(entries).toEqual([]);
+    expect(skipped).toContainEqual({ ticker: 'NVDA', reason: 'trend gate' });
+  });
+
+  it('gap gate blocks a long fading a big gap-down on volume', () => {
+    const c = cfg({ ...t50, signals: { gap: { enabled: true, contra_gate: true, min_gap_pct: 3, min_rel_volume: 2 } } });
+    const { entries, skipped } = computeThesisEntries(
+      longs3(0.9),
+      miWith({ gapPct: -5, gapRelVolume: 3 }),
+      account(100_000),
+      c,
+    );
+    expect(entries).toEqual([]);
+    expect(skipped).toContainEqual({ ticker: 'NVDA', reason: 'gap gate' });
+  });
+
+  it('regime direction scalar shrinks long size; volScalar shrinks all', () => {
+    const regime = { longScalar: 0.4, shortScalar: 1, volScalar: 0.5, thresholdBump: 0, state: 'test' };
+    const e = computeThesisEntries(longs3(0.9), miWith({}), account(100_000), cfg(t50), regime).entries[0]!;
+    // 1800 * (0.4 * 0.5) = 360
+    expect(e.targetNotionalUsd).toBe(360);
+  });
+
+  it('regime threshold bump raises the bar and can skip an otherwise-passing entry', () => {
+    const regime = { longScalar: 1, shortScalar: 1, volScalar: 1, thresholdBump: 0.2, state: 'hostile' };
+    // conviction 0.6 clears 0.5 but not 0.5 + 0.2 = 0.7.
+    const { entries, skipped } = computeThesisEntries(longs3(0.6), miWith({}), account(100_000), cfg(t50), regime);
+    expect(entries).toEqual([]);
+    expect(skipped).toContainEqual({ ticker: 'NVDA', reason: 'below threshold' });
+  });
+
+  it('calibration remaps the conviction used for the threshold and sizing', () => {
+    // map 0.9 -> 0.5; threshold 0.5 passes; size uses 0.5 -> 2000*0.5 = 1000.
+    const c = cfg({
+      conviction_threshold: 0.5,
+      calibration: { enabled: true, table: [{ score: 0, prob: 0 }, { score: 0.9, prob: 0.5 }, { score: 1, prob: 0.6 }] },
+    });
+    const e = computeThesisEntries(longs3(0.9), miWith({}), account(100_000), c).entries[0]!;
+    expect(e.weightedConviction).toBeCloseTo(0.5, 10);
+    expect(e.targetNotionalUsd).toBe(1000);
+  });
+
+  it('portfolio target-vol scalar shrinks the whole book (down-only)', () => {
+    // Volatile returns + a tight 1% book-vol target so the scalar binds even at
+    // this small position size (a single 1.8%-of-equity name has low book vol).
+    const returns = new Map([['NVDA', Array.from({ length: 40 }, (_, i) => (i % 2 === 0 ? 0.05 : -0.05))]]);
+    const c = cfg({ ...t50, portfolio: { target_vol: { enabled: true, pct: 1 } } });
+    const e = computeThesisEntries(longs3(0.9), miWith({}), account(100_000), c, undefined, returns).entries[0]!;
+    expect(e.targetNotionalUsd).toBeLessThan(1800);
+    expect(e.targetNotionalUsd).toBeGreaterThan(0);
+  });
+
+  it('portfolio inverse-vol reallocates the budget toward the lower-vol name', () => {
+    // Two equal-conviction names; CALM has tiny returns, WILD has large ones.
+    const verdicts = [...longs3(0.9, 'CALM'), ...longs3(0.9, 'WILD')];
+    const info = new Map<string, TickerMarketInfo>([
+      ['CALM', { lastPrice: 100, avgDollarVolume20d: 1e9 }],
+      ['WILD', { lastPrice: 100, avgDollarVolume20d: 1e9 }],
+    ]);
+    // Vols close enough that both stay above the min-position floor after the
+    // reallocation (CALM ~1% daily, WILD ~3% daily).
+    const returns = new Map<string, number[]>([
+      ['CALM', Array.from({ length: 40 }, (_, i) => (i % 2 === 0 ? 0.01 : -0.01))],
+      ['WILD', Array.from({ length: 40 }, (_, i) => (i % 2 === 0 ? 0.03 : -0.03))],
+    ]);
+    const c = cfg({ ...t50, portfolio: { sizing_mode: 'inverse_vol' } });
+    const { entries } = computeThesisEntries(verdicts, info, account(100_000), c, undefined, returns);
+    const calm = entries.find((e) => e.ticker === 'CALM')!;
+    const wild = entries.find((e) => e.ticker === 'WILD')!;
+    expect(calm.targetNotionalUsd).toBeGreaterThan(wild.targetNotionalUsd);
+  });
+});
+
 describe('thesisExpiry', () => {
   it('summer Friday expires Monday 20:00 EDT (UTC-4)', () => {
     // 2026-07-10 is a Friday; next weekday is Mon 2026-07-13.

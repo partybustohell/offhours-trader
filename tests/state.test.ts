@@ -41,6 +41,25 @@ describe('readHaltState', () => {
   });
 });
 
+describe('peak equity high-water mark', () => {
+  it('reads 0 when never recorded', () => {
+    expect(state.readPeakEquity()).toBe(0);
+  });
+
+  it('raises the peak only when a higher equity arrives', () => {
+    expect(state.updatePeakEquity(50_000)).toBe(50_000);
+    expect(state.updatePeakEquity(60_000)).toBe(60_000);
+    expect(state.updatePeakEquity(55_000)).toBe(60_000); // does not lower the peak
+    expect(state.readPeakEquity()).toBe(60_000);
+  });
+
+  it('survives a halt write (separate file)', () => {
+    state.updatePeakEquity(70_000);
+    state.writeHalt('daily loss halt');
+    expect(state.readPeakEquity()).toBe(70_000);
+  });
+});
+
 describe('halt round-trip', () => {
   it('writeHalt persists and readHaltState returns it', () => {
     const at = new Date('2026-07-06T20:30:00Z');

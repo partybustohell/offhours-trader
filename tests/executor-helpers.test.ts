@@ -6,6 +6,30 @@ import {
 } from '../src/executor-loop.js';
 import type { QuoteSnapshot } from '../src/types.js';
 
+describe('entryLimitPrice — semi-passive aggressiveness', () => {
+  const quote = { bid: 100, ask: 100.1 };
+  const band = { low: 97, high: 101 };
+
+  it('aggressiveness 1 (default) is marketable: take the far side, clamped, cent-rounded', () => {
+    expect(entryLimitPrice('long', quote, band)).toBe(100.1); // min(ask, high)
+    expect(entryLimitPrice('long', quote, band, 1)).toBe(100.1);
+    expect(entryLimitPrice('short', quote, band)).toBe(100); // max(bid, low)
+  });
+
+  it('aggressiveness < 1 rests inside the spread by that fraction', () => {
+    // long: bid + 0.5*(ask-bid) = 100.05 (floored)
+    expect(entryLimitPrice('long', quote, band, 0.5)).toBe(100.05);
+    // short: ask - 0.5*(ask-bid) = 100.05 (ceiled)
+    expect(entryLimitPrice('short', quote, band, 0.5)).toBe(100.05);
+    // long fully passive at the bid
+    expect(entryLimitPrice('long', quote, band, 0)).toBe(100);
+  });
+
+  it('still clamps a passive price into the band', () => {
+    expect(entryLimitPrice('long', quote, { low: 97, high: 100.03 }, 0.5)).toBe(100.03);
+  });
+});
+
 describe('partitionFreshQuotes (staleness guard)', () => {
   const now = Date.parse('2026-07-09T21:30:00Z');
   const q = (asOf: string): QuoteSnapshot => ({

@@ -6,8 +6,17 @@ import { loadConfig } from './config.js';
 import { nowET } from './clock.js';
 import { appendAudit } from './audit.js';
 import { candidatesPath, thesisPath, verdictsPath, writeJsonAtomic } from './paths.js';
-import { buildCandidates } from './candidates.js';
+import { buildCandidates, type TickerMarketInfo } from './candidates.js';
 import { computeThesisEntries, thesisExpiry, rthThesisExpiry } from './synthesis.js';
+import { computeRegime, NEUTRAL_REGIME } from './regime.js';
+import {
+  amihudIlliquidity,
+  dailyReturns,
+  gapSignature,
+  momentumPct,
+  pctOf52wHigh,
+  recentReturnPct,
+} from './signals.js';
 import type { ThesisKind } from './types.js';
 import type { BrokerClient } from './broker/client.js';
 import { AlpacaBroker } from './broker/client.js';
@@ -109,9 +118,12 @@ export async function runPipeline(deps: PipelineDeps = {}): Promise<Thesis> {
   }
 
   const candidateTickers = candidateFile.candidates.map((c) => c.ticker);
-  const [barsBySymbol, candidateNews] = await Promise.all([
-    md.getDailyBars(candidateTickers),
+  // ~260 daily bars so the P3 momentum / 52-week-high features have history;
+  // ADV and realized vol stay on their trailing-20 windows inside marketInfoFor.
+  const [barsBySymbol, candidateNews, spyBarsMap] = await Promise.all([
+    md.getDailyBars(candidateTickers, 260),
     md.getNews(50, candidateTickers),
+    md.getDailyBars(['SPY'], 260),
   ]);
   const verdictFile = await runVerdicts(
     cfg,
@@ -119,6 +131,36 @@ export async function runPipeline(deps: PipelineDeps = {}): Promise<Thesis> {
     { barsBySymbol, newsBySymbol: groupNewsBySymbol(candidateNews, candidateTickers) },
     deps.llm,
   );
+
+  // Enrich market info with per-name signal features from the candidate bars,
+  // and build the per-ticker return series for the whole-book portfolio pass.
+  // Features are computed unconditionally (cheap) and consumed only by enabled
+  // signals; all P1-P3 signals ship flag-off, so this changes nothing yet.
+  const enrichedInfo = new Map<string, TickerMarketInfo>();
+  for (const [t, mi] of marketInfo) enrichedInfo.set(t.toUpperCase(), { ...mi });
+  const returnsByTicker = new Map<string, number[]>();
+  for (const [sym, bars] of barsBySymbol) {
+    if (bars.length === 0) continue;
+    const key = sym.toUpperCase();
+    const closes = bars.map((b) => b.c);
+    const opens = bars.map((b) => b.o);
+    const vols = bars.map((b) => b.v);
+    const mi: TickerMarketInfo =
+      enrichedInfo.get(key) ?? { lastPrice: closes[closes.length - 1] ?? 0, avgDollarVolume20d: 0 };
+    mi.recentReturnPct = recentReturnPct(closes, cfg.signals.anti_chase.lookback_days);
+    mi.amihudIlliquidity = amihudIlliquidity(closes, vols, cfg.signals.amihud.window_days);
+    mi.momentumPct = momentumPct(closes, cfg.signals.trend_gate.lookback_days, cfg.signals.trend_gate.skip_days);
+    mi.pctOf52wHigh = pctOf52wHigh(closes, cfg.signals.trend_gate.lookback_days);
+    const g = gapSignature(opens, closes, vols);
+    if (g) {
+      mi.gapPct = g.gapPct;
+      mi.gapRelVolume = g.relVolume;
+    }
+    enrichedInfo.set(key, mi);
+    returnsByTicker.set(key, dailyReturns(closes));
+  }
+  const spyBars = spyBarsMap.get('SPY') ?? [];
+  const regime = spyBars.length > 0 ? computeRegime(spyBars.map((b) => b.c), cfg.regime) : NEUTRAL_REGIME;
   writeJsonAtomic(verdictsPath(ymd), verdictFile);
   for (const verdict of verdictFile.verdicts) {
     appendAudit({ kind: 'verdict', data: verdict });
@@ -129,7 +171,14 @@ export async function runPipeline(deps: PipelineDeps = {}): Promise<Thesis> {
 
   const broker = deps.broker ?? new AlpacaBroker(cfg);
   const account = await broker.getAccount();
-  const computed = computeThesisEntries(verdictFile.verdicts, marketInfo, account, cfg);
+  const computed = computeThesisEntries(
+    verdictFile.verdicts,
+    enrichedInfo,
+    account,
+    cfg,
+    regime,
+    returnsByTicker,
+  );
 
   const narratives = await writeNarratives(cfg, computed.entries, verdictFile.verdicts, deps.llm);
   const entries: ThesisEntry[] = computed.entries.map((entry) => {
@@ -148,6 +197,13 @@ export async function runPipeline(deps: PipelineDeps = {}): Promise<Thesis> {
     expiresAt,
     entries,
     skipped: computed.skipped,
+    regime: {
+      state: regime.state,
+      longScalar: regime.longScalar,
+      shortScalar: regime.shortScalar,
+      volScalar: regime.volScalar,
+      thresholdBump: regime.thresholdBump,
+    },
   };
   writeJsonAtomic(thesisPath(ymd, kind), thesis);
   appendAudit({

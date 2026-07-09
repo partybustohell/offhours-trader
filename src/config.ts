@@ -104,6 +104,168 @@ export const ConfigSchema = z.object({
   // trades. Guards against an economic claim from a handful of trades. Paired
   // with the deflated-Sharpe hurdle and docs/TRIAL-REGISTRY.md.
   min_trades_for_economic_claim: z.number().int().min(0).default(50),
+
+  // ---- P1-P3 quant signals (ALL ship flag-OFF; enable only after the paper
+  // soak accumulates >=50 out-of-sample closed trades). Every one is a DOWN-
+  // ONLY size multiplier, a fail-closed gate, or an ordering tweak — never a
+  // directional vote, never injected into LLM prompts. See the design spec. ----
+
+  // Multiplicative floor on the PRODUCT of the new down-only signal scalars, so
+  // stacking (anti-chase * amihud * dispersion * regime ...) can never collapse
+  // a position to a de-facto skip. Does NOT floor the existing volScalar.
+  signal_scalar_floor: z.number().min(0).max(1).default(0.2),
+  signals: z
+    .object({
+      // Short-term reversal: haircut a name that already ran hard in the
+      // trade's direction (buying strength / shorting weakness is chasing).
+      anti_chase: z
+        .object({
+          enabled: z.boolean().default(false),
+          lookback_days: z.number().int().min(1).max(60).default(5),
+          run_threshold_pct: z.number().min(0).default(10),
+          haircut: z.number().min(0).max(1).default(0.5),
+          band_tighten_pct: z.number().min(0).max(1).default(0.5),
+        })
+        .default({}),
+      // Amihud illiquidity: haircut names whose price moves a lot per dollar
+      // traded (thin books eat the edge). max_amihud 0 -> haircut only, no gate.
+      amihud: z
+        .object({
+          enabled: z.boolean().default(false),
+          window_days: z.number().int().min(2).max(60).default(20),
+          max_amihud: z.number().min(0).default(0),
+          size_haircut: z.number().min(0).max(1).default(0.5),
+        })
+        .default({}),
+      // Analyst-ensemble dispersion (P2): shrink size when agreeing analysts
+      // disagree in strength. k=0 ships inert (scalar always 1).
+      dispersion: z
+        .object({
+          enabled: z.boolean().default(false),
+          k: z.number().min(0).default(0),
+          floor: z.number().min(0).max(1).default(0.6),
+        })
+        .default({}),
+      // 12-1 momentum / 52wk-high counter-trend veto (P3): block entries that
+      // fight a strong long-horizon trend. Needs ~252 daily bars.
+      trend_gate: z
+        .object({
+          enabled: z.boolean().default(false),
+          lookback_days: z.number().int().min(60).max(300).default(252),
+          skip_days: z.number().int().min(0).max(40).default(21),
+          min_pct_of_52w_high: z.number().min(0).max(1).default(0.75),
+          contra_block: z.boolean().default(true),
+        })
+        .default({}),
+      // Catalyst-gap continuation (P3): a big gap on volume is a catalyst;
+      // fading it is dangerous. Contra-direction entries are gated/haircut.
+      gap: z
+        .object({
+          enabled: z.boolean().default(false),
+          min_gap_pct: z.number().min(0).default(3),
+          min_rel_volume: z.number().min(0).default(2.0),
+          contra_gate: z.boolean().default(true),
+        })
+        .default({}),
+      // Low realized-vol candidate-ranking tiebreak (P3).
+      low_vol: z.object({ prefer_low_vol: z.boolean().default(false) }).default({}),
+    })
+    .default({}),
+  // Market regime overlays (P1 trend gate; P2 realized-vol + index-TSMOM).
+  regime: z
+    .object({
+      trend: z
+        .object({
+          enabled: z.boolean().default(false),
+          sma_long_days: z.number().int().min(20).max(300).default(200),
+          hostile_long_scalar: z.number().min(0).max(1).default(0.4),
+          hostile_short_scalar: z.number().min(0).max(1).default(1.0),
+          benign_long_scalar: z.number().min(0).max(1).default(1.0),
+          benign_short_scalar: z.number().min(0).max(1).default(0.6),
+          threshold_bump: z.number().min(0).max(1).default(0),
+        })
+        .default({}),
+      vol: z
+        .object({
+          enabled: z.boolean().default(false),
+          lookback_days: z.number().int().min(5).max(60).default(20),
+          percentile_window_days: z.number().int().min(60).max(504).default(252),
+          elevated_pctile: z.number().min(0).max(1).default(0.8),
+          stressed_pctile: z.number().min(0).max(1).default(0.95),
+          elevated_scalar: z.number().min(0).max(1).default(0.6),
+          stressed_scalar: z.number().min(0).max(1).default(0.3),
+        })
+        .default({}),
+      gross: z
+        .object({
+          enabled: z.boolean().default(false),
+          lookback_days: z.number().int().min(60).max(400).default(252),
+          ma_days: z.number().int().min(20).max(300).default(200),
+          risk_off_scalar: z.number().min(0).max(1).default(0.5),
+        })
+        .default({}),
+    })
+    .default({}),
+  // Portfolio construction (P2). sizing_mode 'legacy' keeps per-name sizing;
+  // 'inverse_vol' switches to conviction-tilted risk-parity basket weights.
+  portfolio: z
+    .object({
+      sizing_mode: z.enum(['legacy', 'inverse_vol']).default('legacy'),
+      target_vol: z.object({ enabled: z.boolean().default(false), pct: z.number().positive().default(20) }).default({}),
+      cov_lookback_days: z.number().int().min(20).max(252).default(60),
+      cov_shrinkage: z.enum(['constant_corr', 'single_factor', 'none']).default('constant_corr'),
+      correlation_sizing: z.boolean().default(false),
+    })
+    .default({}),
+  // Execution-quality signals (P1 cost scalar + participation; P3 placement).
+  // Session-microstructure gates are SIP-only: on the default IEX feed they
+  // stay at today's flat values and only tighten when data_feed='sip'.
+  execution: z
+    .object({
+      cost_scalar: z
+        .object({
+          enabled: z.boolean().default(false),
+          floor: z.number().min(0).max(1).default(0.5),
+          max_roundtrip_cost_bps: z.number().min(0).default(45),
+        })
+        .default({}),
+      participation: z
+        .object({ enabled: z.boolean().default(false), max_top_size_fraction: z.number().min(0).default(0.25) })
+        .default({}),
+      // 1.0 = today's marketable band-clamp (all existing behavior); <1 rests
+      // more passively inside the spread. SIP-sensitive; keep 1.0 on IEX.
+      entry_aggressiveness: z.number().min(0).max(1).default(1),
+      gates_by_session: z
+        .object({
+          enabled: z.boolean().default(false), // SIP-only; OFF -> flat gates apply
+          rth: z.object({ max_spread_bps: z.number().positive().default(20), max_quote_age_sec: z.number().positive().default(20), min_top_size: z.number().min(0).default(100) }).default({}),
+          premarket: z.object({ max_spread_bps: z.number().positive().default(80), max_quote_age_sec: z.number().positive().default(90), min_top_size: z.number().min(0).default(100) }).default({}),
+          afterhours: z.object({ max_spread_bps: z.number().positive().default(80), max_quote_age_sec: z.number().positive().default(90), min_top_size: z.number().min(0).default(100) }).default({}),
+        })
+        .default({}),
+    })
+    .default({}),
+  // Book-level live risk overlays (P2), evaluated in the executor tick.
+  risk_overlay: z
+    .object({
+      drawdown_throttle: z
+        .object({ enabled: z.boolean().default(false), floor_pct: z.number().positive().default(3), min_throttle: z.number().min(0).max(1).default(0.25) })
+        .default({}),
+      risk_off: z
+        .object({ enabled: z.boolean().default(false), spy_drop_pct: z.number().min(0).default(2.0), freeze_rest_of_session: z.boolean().default(true) })
+        .default({}),
+    })
+    .default({}),
+  // Monotone conviction calibration (P3). Ships as identity; a fitted table is
+  // only valid once >=50 OOS closed trades exist (governance gate).
+  calibration: z
+    .object({
+      enabled: z.boolean().default(false),
+      min_trades: z.number().int().min(0).default(50),
+      // sorted (score,winProb) breakpoints; empty -> identity map.
+      table: z.array(z.object({ score: z.number(), prob: z.number() })).default([]),
+    })
+    .default({}),
   model: z
     .object({
       analysts: z.string().default('claude-sonnet-5'),
@@ -145,7 +307,19 @@ export function saveConfig(next: unknown, configPath: string = CONFIG_PATH): Con
   const patch = next as Record<string, unknown>;
   const candidate: Record<string, unknown> = { ...current, ...patch };
   // one level of nesting: merge known object fields key-by-key
-  for (const key of ['universe', 'sessions', 'agent_weights', 'model', 'entry_blackout'] as const) {
+  for (const key of [
+    'universe',
+    'sessions',
+    'agent_weights',
+    'model',
+    'entry_blackout',
+    'signals',
+    'regime',
+    'portfolio',
+    'execution',
+    'risk_overlay',
+    'calibration',
+  ] as const) {
     if (patch[key] !== undefined) {
       if (patch[key] === null || typeof patch[key] !== 'object' || Array.isArray(patch[key])) {
         throw new Error(`invalid config: ${key} must be an object`);

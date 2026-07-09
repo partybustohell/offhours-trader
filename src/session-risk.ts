@@ -42,3 +42,28 @@ export function entryTimingAllowed(session: Session, minutesET: number, cfg: Con
       return false; // 'closed' — nothing trades
   }
 }
+
+export interface SessionGate {
+  maxSpreadBps: number;
+  maxQuoteAgeSec: number;
+  minTopSize: number;
+}
+
+/**
+ * Pre-trade gate thresholds for a session. Session-calibrated values are
+ * SIP-only: on the default IEX feed (or when the feature is off) they fall back
+ * to the flat config values (today's behavior), so nothing tightens on IEX
+ * where the top-of-book is fractional and refreshes slowly. `closed` uses flat.
+ */
+export function sessionGate(session: Session, cfg: Config): SessionGate {
+  const flat: SessionGate = {
+    maxSpreadBps: cfg.max_spread_bps,
+    maxQuoteAgeSec: cfg.max_quote_age_sec,
+    minTopSize: 1,
+  };
+  const g = cfg.execution.gates_by_session;
+  if (!g.enabled || cfg.data_feed !== 'sip') return flat;
+  const s = session === 'rth' ? g.rth : session === 'premarket' ? g.premarket : session === 'afterhours' ? g.afterhours : null;
+  if (!s) return flat;
+  return { maxSpreadBps: s.max_spread_bps, maxQuoteAgeSec: s.max_quote_age_sec, minTopSize: s.min_top_size };
+}

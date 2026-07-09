@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ConfigSchema, type Config } from '../src/config.js';
-import { entryTimingAllowed, hmToMinutes } from '../src/session-risk.js';
+import { entryTimingAllowed, hmToMinutes, sessionGate } from '../src/session-risk.js';
 import type { Session } from '../src/types.js';
 
 const cfg = (overrides: Record<string, unknown> = {}): Config => ConfigSchema.parse(overrides);
@@ -70,5 +70,27 @@ describe('entryTimingAllowed (defaults: open/close 10 min, premarket 08:00, afte
     const none = cfg({ entry_blackout: { rth_open_min: 0, rth_close_min: 0 } });
     expect(entryTimingAllowed('rth', at('09:30'), none)).toBe(true);
     expect(entryTimingAllowed('rth', at('15:59'), none)).toBe(true);
+  });
+});
+
+describe('sessionGate (session-calibrated pre-trade gates; SIP-only)', () => {
+  it('defaults to flat config values on the free IEX feed for every session', () => {
+    const c = cfg(); // data_feed iex, gates_by_session disabled
+    for (const s of ['rth', 'premarket', 'afterhours', 'closed'] as Session[]) {
+      expect(sessionGate(s, c)).toEqual({ maxSpreadBps: c.max_spread_bps, maxQuoteAgeSec: c.max_quote_age_sec, minTopSize: 1 });
+    }
+  });
+
+  it('stays flat even when gates are enabled if the feed is still IEX', () => {
+    const c = cfg({ execution: { gates_by_session: { enabled: true } } });
+    expect(sessionGate('rth', c)).toEqual({ maxSpreadBps: c.max_spread_bps, maxQuoteAgeSec: c.max_quote_age_sec, minTopSize: 1 });
+  });
+
+  it('applies tight session-specific values only on SIP with gates enabled', () => {
+    const c = cfg({ data_feed: 'sip', execution: { gates_by_session: { enabled: true } } });
+    expect(sessionGate('rth', c)).toEqual({ maxSpreadBps: 20, maxQuoteAgeSec: 20, minTopSize: 100 });
+    expect(sessionGate('premarket', c)).toEqual({ maxSpreadBps: 80, maxQuoteAgeSec: 90, minTopSize: 100 });
+    // closed session has no calibrated entry -> flat fallback
+    expect(sessionGate('closed', c)).toEqual({ maxSpreadBps: c.max_spread_bps, maxQuoteAgeSec: c.max_quote_age_sec, minTopSize: 1 });
   });
 });

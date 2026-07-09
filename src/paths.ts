@@ -16,6 +16,9 @@ export const thesisPath = (ymd: string, kind: 'offhours' | 'rth' = 'offhours') =
   path.join(OUT_DIR, kind === 'rth' ? `thesis-${ymd}-rth.json` : `thesis-${ymd}.json`);
 export const auditPath = (ymd: string) => path.join(OUT_DIR, `audit-${ymd}.jsonl`);
 export const statePath = () => path.join(OUT_DIR, 'state.json');
+/** High-water-mark equity for the drawdown throttle (separate file so the halt
+ *  state write never clobbers it). */
+export const peakPath = () => path.join(OUT_DIR, 'peak.json');
 
 export function writeJsonAtomic(file: string, data: unknown): void {
   ensureOut();

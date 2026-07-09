@@ -73,6 +73,26 @@ describe('ConfigSchema defaults', () => {
       premarket_start_hm: '08:00',
       afterhours_end_hm: '18:00',
     });
+    // P1–P3 signals ALL ship flag-off / inert
+    expect(cfg.signal_scalar_floor).toBe(0.2);
+    expect(cfg.signals.anti_chase.enabled).toBe(false);
+    expect(cfg.signals.amihud.enabled).toBe(false);
+    expect(cfg.signals.dispersion.enabled).toBe(false);
+    expect(cfg.signals.trend_gate.enabled).toBe(false);
+    expect(cfg.signals.gap.enabled).toBe(false);
+    expect(cfg.signals.low_vol.prefer_low_vol).toBe(false);
+    expect(cfg.regime.trend.enabled).toBe(false);
+    expect(cfg.regime.vol.enabled).toBe(false);
+    expect(cfg.regime.gross.enabled).toBe(false);
+    expect(cfg.portfolio.sizing_mode).toBe('legacy');
+    expect(cfg.portfolio.target_vol.enabled).toBe(false);
+    expect(cfg.execution.entry_aggressiveness).toBe(1);
+    expect(cfg.execution.cost_scalar.enabled).toBe(false);
+    expect(cfg.execution.participation.enabled).toBe(false);
+    expect(cfg.execution.gates_by_session.enabled).toBe(false);
+    expect(cfg.risk_overlay.drawdown_throttle.enabled).toBe(false);
+    expect(cfg.risk_overlay.risk_off.enabled).toBe(false);
+    expect(cfg.calibration.enabled).toBe(false);
   });
 });
 
@@ -166,6 +186,14 @@ describe('saveConfig', () => {
     expect(saved.entry_blackout.rth_open_min).toBe(20); // preserved from disk, not reset
     expect(saved.entry_blackout.afterhours_end_hm).toBe('17:00'); // patched
     expect(saved.entry_blackout.rth_close_min).toBe(10); // default filled
+  });
+
+  it('merges the new signal config objects key-by-key (e.g. execution)', () => {
+    fs.writeFileSync(configPath, stringifyYaml({ execution: { entry_aggressiveness: 0.75 } }));
+    const saved = saveConfig({ execution: { participation: { enabled: true } } }, configPath);
+    expect(saved.execution.entry_aggressiveness).toBe(0.75); // preserved from disk
+    expect(saved.execution.participation.enabled).toBe(true); // patched
+    expect(saved.execution.cost_scalar.enabled).toBe(false); // default filled
   });
 });
 

@@ -58,6 +58,14 @@ export interface Thesis {
   expiresAt: string; // ISO
   entries: ThesisEntry[];
   skipped: { ticker: string; reason: string }[];
+  // Market regime overlay applied at synthesis (optional; audit/dashboard).
+  regime?: {
+    state: string;
+    longScalar: number;
+    shortScalar: number;
+    volScalar: number;
+    thresholdBump: number;
+  };
 }
 
 export interface QuoteSnapshot {

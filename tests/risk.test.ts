@@ -79,6 +79,23 @@ describe('riskCheck', () => {
     });
   });
 
+  describe('rule 1b: risk-off freeze', () => {
+    it('rejects entries while the intraday risk-off freeze is set', () => {
+      const d = riskCheck(makeOrder(), makeCtx({ riskOffFreeze: true }));
+      expect(d.allowed).toBe(false);
+      expect(d.reasons).toContain('risk-off freeze');
+    });
+
+    it('allows exits while risk-off is set', () => {
+      const d = riskCheck(makeOrder({ intent: 'exit', side: 'sell' }), makeCtx({ riskOffFreeze: true }));
+      expect(d).toEqual({ allowed: true, reasons: [] });
+    });
+
+    it('undefined riskOffFreeze is a no-op', () => {
+      expect(riskCheck(makeOrder(), makeCtx())).toEqual({ allowed: true, reasons: [] });
+    });
+  });
+
   describe('rule 2: daily-loss kill switch', () => {
     it('trips on exact boundary equality (dailyPl === -equity*pct/100)', () => {
       const d = riskCheck(makeOrder(), makeCtx({ dailyPl: -3000 }));

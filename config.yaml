@@ -64,6 +64,18 @@ thesis_run_time_et: 17:00
 # Backtest/report governance only (no trading effect): the report refuses an
 # economic PASS/FAIL verdict below this many headline-stratum trades.
 min_trades_for_economic_claim: 50
+
+# ---- P1–P3 quant signals: ALL ship flag-OFF and their full schema + defaults
+# live in src/config.ts (ConfigSchema) so they need not be repeated here. Do NOT
+# enable any until the paper soak has >=50 out-of-sample closed trades. Each is a
+# down-only size multiplier, a fail-closed gate, or an ordering tweak; none is a
+# directional vote. Groups: signals.* (anti_chase, amihud, dispersion, trend_gate,
+# gap, low_vol), regime.* (trend, vol, gross), portfolio.* (sizing_mode,
+# target_vol, cov_*), execution.* (cost_scalar, participation, entry_aggressiveness,
+# gates_by_session — SIP-only), risk_overlay.* (drawdown_throttle, risk_off),
+# calibration.*, and signal_scalar_floor. See docs/superpowers/specs. Example:
+# signals:
+#   anti_chase: { enabled: true }   # override just the fields you want ----
 model:
   analysts: claude-sonnet-5
   synthesizer: claude-opus-4-8
