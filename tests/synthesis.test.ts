@@ -406,6 +406,21 @@ describe('computeThesisEntries — P1–P3 signals (opt-in, down-only / gate)', 
     expect(e.targetNotionalUsd).toBeGreaterThan(0);
   });
 
+  it('portfolio cov_lookback_days is honored (shorter calm window -> less shrink)', () => {
+    // 60 wild days then 20 calm days. A 20-day window sees only the calm tail
+    // (low book vol -> larger size); a 70-day window includes the wild stretch.
+    const series = [
+      ...Array.from({ length: 60 }, (_, i) => (i % 2 === 0 ? 0.05 : -0.05)),
+      ...Array.from({ length: 20 }, (_, i) => (i % 2 === 0 ? 0.005 : -0.005)),
+    ];
+    const returns = new Map<string, number[]>([['NVDA', series]]);
+    const c20 = cfg({ ...t50, portfolio: { target_vol: { enabled: true, pct: 1 }, cov_lookback_days: 20 } });
+    const c70 = cfg({ ...t50, portfolio: { target_vol: { enabled: true, pct: 1 }, cov_lookback_days: 70 } });
+    const e20 = computeThesisEntries(longs3(0.9), miWith({}), account(100_000), c20, undefined, returns).entries[0]!;
+    const e70 = computeThesisEntries(longs3(0.9), miWith({}), account(100_000), c70, undefined, returns).entries[0]!;
+    expect(e20.targetNotionalUsd).toBeGreaterThan(e70.targetNotionalUsd);
+  });
+
   it('portfolio inverse-vol reallocates the budget toward the lower-vol name', () => {
     // Two equal-conviction names; CALM has tiny returns, WILD has large ones.
     const verdicts = [...longs3(0.9, 'CALM'), ...longs3(0.9, 'WILD')];

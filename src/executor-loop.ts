@@ -157,9 +157,12 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
   }
 
   // Book-level overlays (P2, flag-off by default -> throttle 1, no freeze) and
-  // the session-calibrated pre-trade gate (SIP-only; flat on IEX).
-  const peak = updatePeakEquity(account.equity, now);
-  const ddThrottle = drawdownThrottle(account.equity, peak, cfg.risk_overlay.drawdown_throttle);
+  // the session-calibrated pre-trade gate (SIP-only; flat on IEX). The peak
+  // high-water mark is only read/written when the throttle is enabled, so the
+  // flag-off path writes no new artifact.
+  const ddThrottle = cfg.risk_overlay.drawdown_throttle.enabled
+    ? drawdownThrottle(account.equity, updatePeakEquity(account.equity, now), cfg.risk_overlay.drawdown_throttle)
+    : 1;
   const gate = sessionGate(session, cfg);
 
   let riskOffFreeze = false;

@@ -212,9 +212,11 @@ export const ConfigSchema = z.object({
     .object({
       sizing_mode: z.enum(['legacy', 'inverse_vol']).default('legacy'),
       target_vol: z.object({ enabled: z.boolean().default(false), pct: z.number().positive().default(20) }).default({}),
+      // Covariance estimation window for the whole-book vol target / inverse-vol
+      // sizing. Correlation enters here: the shrinkage covariance makes a book of
+      // correlated names read as higher vol, so target-vol shrinks it more.
       cov_lookback_days: z.number().int().min(20).max(252).default(60),
       cov_shrinkage: z.enum(['constant_corr', 'single_factor', 'none']).default('constant_corr'),
-      correlation_sizing: z.boolean().default(false),
     })
     .default({}),
   // Execution-quality signals (P1 cost scalar + participation; P3 placement).

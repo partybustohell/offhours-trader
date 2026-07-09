@@ -224,8 +224,9 @@ function applyPortfolioSizing(
 
   const series = entries.map((e) => returnsByTicker.get(e.ticker.toUpperCase()));
   if (series.some((s) => s === undefined || s.length < 2)) return;
-  const minLen = Math.min(...series.map((s) => s!.length));
-  const aligned = series.map((s) => s!.slice(s!.length - minLen));
+  // Align to a common length AND honor the configured covariance window.
+  const window = Math.min(Math.min(...series.map((s) => s!.length)), pcfg.cov_lookback_days);
+  const aligned = series.map((s) => s!.slice(s!.length - window));
   const baseNotional = Math.min(cfg.max_order_notional_usd, (equity * cfg.max_position_pct) / 100);
 
   if (useInverseVol) {
