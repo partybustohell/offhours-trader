@@ -46,6 +46,8 @@ import { clearHalt as clearHaltState, readHaltState } from '../src/state.js';
 import { riskCheck, type RiskContext } from '../src/risk.js';
 import { runTick, seedDeployedTodayUsd } from '../src/executor-loop.js';
 import { computeThesisEntries, thesisExpiry } from '../src/synthesis.js';
+import { realizedVolAnnualized } from '../src/candidates.js';
+import { loadDailyBars } from '../src/backtest/data.js';
 import { writeNarratives } from '../src/agents/narrative.js';
 import type { LlmClient } from '../src/agents/llm.js';
 import type { BrokerClient } from '../src/broker/client.js';
@@ -405,8 +407,22 @@ export async function runEpisode(
   );
 
   // ---- thesis assembly: REAL production functions, production merge ----
+  // Backfill realized vol from the cached IEX daily bars (prep files predate
+  // the vol field). No LLM cost — vol is pure math over stored bars. This is
+  // what production's marketInfoFor now computes inline.
   const marketInfo = new Map<string, TickerMarketInfo>(
-    Object.entries(prep.marketInfo).map(([k, v]) => [k.toUpperCase(), v]),
+    Object.entries(prep.marketInfo).map(([k, v]) => {
+      const ticker = k.toUpperCase();
+      if (v.realizedVolAnnualized === undefined) {
+        const closes = loadDailyBars('iex', ticker)
+          .filter((b) => b.t.slice(0, 10) <= day)
+          .slice(-20)
+          .map((b) => b.c);
+        const vol = realizedVolAnnualized(closes);
+        if (vol !== undefined) return [ticker, { ...v, realizedVolAnnualized: vol }];
+      }
+      return [ticker, v];
+    }),
   );
   const account = await ledger.getAccount();
   const computed = computeThesisEntries(prep.verdicts.verdicts, marketInfo, account, cfg);
