@@ -167,6 +167,108 @@ app.get(
   }),
 );
 
+// Latest backtest results, aggregated from backtest-out/. Read-only; the
+// backtest itself runs via scripts/backtest.ts, never through this server.
+interface BacktestCellRow {
+  cell: string;
+  threshold: number;
+  bear: number;
+  abstained: number;
+  ordersPlaced: number;
+  ordersFilled: number;
+  trades: number;
+  netPnlUsd: number;
+}
+interface BacktestTradeRow {
+  day: string;
+  stratum: string;
+  ticker: string;
+  side: string;
+  qty: number;
+  entryPrice: number;
+  exitPrice: number;
+  pnlUsd: number;
+  exitReason: string;
+}
+let backtestCache: { at: number; payload: unknown } | null = null;
+
+app.get(
+  '/api/backtest',
+  wrap((_req, res) => {
+    if (backtestCache && Date.now() - backtestCache.at < 60_000) {
+      res.json(backtestCache.payload);
+      return;
+    }
+    const btRoot = path.resolve(process.cwd(), 'backtest-out');
+    const tags = fs.existsSync(btRoot)
+      ? fs
+          .readdirSync(btRoot)
+          .filter((t) => t !== 'prep' && fs.existsSync(path.join(btRoot, t, 'sweep-results.json')))
+          .sort(
+            (a, b) =>
+              fs.statSync(path.join(btRoot, b, 'sweep-results.json')).mtimeMs -
+              fs.statSync(path.join(btRoot, a, 'sweep-results.json')).mtimeMs,
+          )
+      : [];
+    const tag = tags[0];
+    if (!tag) {
+      res.json({ available: false });
+      return;
+    }
+    const readTradesOf = (dir: string): BacktestTradeRow[] => {
+      const out: BacktestTradeRow[] = [];
+      if (!fs.existsSync(dir)) return out;
+      for (const day of fs.readdirSync(dir)) {
+        const f = path.join(dir, day, 'episode-result.json');
+        if (!fs.existsSync(f)) continue;
+        try {
+          const ep = JSON.parse(fs.readFileSync(f, 'utf8')) as {
+            day: string;
+            stratum?: string;
+            trades?: Omit<BacktestTradeRow, 'day' | 'stratum'>[];
+          };
+          for (const t of ep.trades ?? []) {
+            out.push({ ...t, day: ep.day, stratum: ep.stratum ?? '?' });
+          }
+        } catch {
+          // unreadable episode: skip
+        }
+      }
+      return out.sort((a, b) => a.day.localeCompare(b.day));
+    };
+    const rawCells = JSON.parse(
+      fs.readFileSync(path.join(btRoot, tag, 'sweep-results.json'), 'utf8'),
+    ) as (Omit<BacktestCellRow, 'netPnlUsd'> & { netPnlUsd?: number | null })[];
+    const cellList = Array.isArray(rawCells)
+      ? rawCells
+      : (rawCells as { cells: typeof rawCells }).cells;
+    const cells: BacktestCellRow[] = cellList.map((c) => {
+      const trades = readTradesOf(path.join(btRoot, tag, 'sweep', c.cell));
+      return {
+        ...c,
+        netPnlUsd:
+          typeof c.netPnlUsd === 'number'
+            ? c.netPnlUsd
+            : Math.round(trades.reduce((s, t) => s + t.pnlUsd, 0) * 100) / 100,
+      };
+    });
+    // trade log from the loosest cell that actually traded
+    const traded = [...cells].sort((a, b) => b.trades - a.trades)[0];
+    const trades = traded ? readTradesOf(path.join(btRoot, tag, 'sweep', traded.cell)) : [];
+    const reportPath = path.join(btRoot, tag, 'REPORT.md');
+    const payload = {
+      available: true,
+      tag,
+      generatedAt: fs.existsSync(reportPath) ? fs.statSync(reportPath).mtime.toISOString() : null,
+      cells,
+      tradeLogCell: traded?.cell ?? null,
+      trades,
+    };
+    backtestCache = { at: Date.now(), payload };
+    res.json(payload);
+  }),
+);
+
 app.put(
   '/api/config',
   wrap((req, res) => {

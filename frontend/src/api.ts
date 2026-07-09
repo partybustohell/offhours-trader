@@ -1,6 +1,7 @@
 import type {
   AuditEvent,
   AuditKind,
+  BacktestResponse,
   BrokerOrder,
   CandidateFile,
   Config,
@@ -220,4 +221,10 @@ export function fmtClock(iso: string): string {
   const t = Date.parse(iso);
   if (!Number.isFinite(t)) return iso;
   return new Date(t).toLocaleTimeString('en-US', { hour12: false });
+}
+
+export async function fetchBacktest(): Promise<BacktestResponse> {
+  const raw = await getJson('/api/backtest');
+  if (isObj(raw) && typeof raw.available === 'boolean') return raw as unknown as BacktestResponse;
+  return { available: false };
 }

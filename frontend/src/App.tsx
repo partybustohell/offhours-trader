@@ -11,6 +11,7 @@ import type {
 } from './types';
 import {
   fetchAudit,
+  fetchBacktest,
   fetchCandidates,
   fetchConfig,
   fetchOrders,
@@ -19,6 +20,8 @@ import {
   fetchThesis,
   fetchVerdicts,
 } from './api';
+import type { BacktestResponse } from './types';
+import BacktestPanel from './panels/BacktestPanel';
 import StatusBar from './panels/StatusBar';
 import ActionsBar from './panels/ActionsBar';
 import CandidatesPanel from './panels/CandidatesPanel';
@@ -39,11 +42,12 @@ export default function App() {
   const [orders, setOrders] = useState<OrdersResponse>({ orders: [] });
   const [audit, setAudit] = useState<AuditEvent[]>([]);
   const [config, setConfig] = useState<Config | null>(null);
+  const [backtest, setBacktest] = useState<BacktestResponse | null>(null);
   const [offline, setOffline] = useState(false);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   const refresh = useCallback(async () => {
-    const [st, ca, th, ve, po, or, au, cf] = await Promise.allSettled([
+    const [st, ca, th, ve, po, or, au, cf, bt] = await Promise.allSettled([
       fetchStatus(),
       fetchCandidates(),
       fetchThesis(),
@@ -52,6 +56,7 @@ export default function App() {
       fetchOrders(),
       fetchAudit(100),
       fetchConfig(),
+      fetchBacktest(),
     ]);
     setOffline(st.status === 'rejected');
     if (st.status === 'fulfilled') setStatus(st.value);
@@ -62,6 +67,7 @@ export default function App() {
     if (or.status === 'fulfilled') setOrders(or.value);
     if (au.status === 'fulfilled') setAudit(au.value);
     if (cf.status === 'fulfilled') setConfig(cf.value);
+    if (bt.status === 'fulfilled') setBacktest(bt.value);
     setLastUpdated(new Date());
   }, []);
 
@@ -81,6 +87,7 @@ export default function App() {
         <section className="col col-thesis">
           <ThesisPanel thesis={thesis} />
           <VerdictsPanel data={verdicts} />
+          <BacktestPanel data={backtest} />
         </section>
         <section className="col col-market">
           <CandidatesPanel data={candidates} />

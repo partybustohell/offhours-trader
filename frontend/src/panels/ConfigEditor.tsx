@@ -16,6 +16,7 @@ interface Draft {
   weights: Record<AnalystName, number>;
   conviction_threshold: string;
   quorum: string;
+  min_agreeing: string;
   max_position_pct: string;
   max_daily_deploy_pct: string;
   max_order_notional_usd: string;
@@ -42,6 +43,7 @@ function toDraft(c: Config): Draft {
     weights: { ...c.agent_weights },
     conviction_threshold: String(c.conviction_threshold),
     quorum: String(c.quorum),
+    min_agreeing: String(c.min_agreeing),
     max_position_pct: String(c.max_position_pct),
     max_daily_deploy_pct: String(c.max_daily_deploy_pct),
     max_order_notional_usd: String(c.max_order_notional_usd),
@@ -74,6 +76,7 @@ function toPayload(d: Draft, c: Config): Record<string, unknown> {
     agent_weights: d.weights,
     conviction_threshold: Number(d.conviction_threshold),
     quorum: Number(d.quorum),
+    min_agreeing: Number(d.min_agreeing),
     max_position_pct: Number(d.max_position_pct),
     max_daily_deploy_pct: Number(d.max_daily_deploy_pct),
     max_order_notional_usd: Number(d.max_order_notional_usd),
@@ -298,6 +301,7 @@ export default function ConfigEditor({ config, onSaved }: Props) {
           onChange={(v) => set({ conviction_threshold: v })}
         />
         <Num label="quorum" value={d.quorum} step="1" onChange={(v) => set({ quorum: v })} />
+        <Num label="min_agreeing" value={d.min_agreeing} step="1" onChange={(v) => set({ min_agreeing: v })} />
         <Text
           label="thesis_run_time_et"
           value={d.thesis_run_time_et}

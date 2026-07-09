@@ -111,6 +111,7 @@ export interface Config {
   agent_weights: Record<AnalystName, number>;
   conviction_threshold: number;
   quorum: number;
+  min_agreeing: number;
   max_position_pct: number;
   max_daily_deploy_pct: number;
   max_order_notional_usd: number;
@@ -144,4 +145,35 @@ export interface PositionsResponse {
 export interface OrdersResponse {
   orders: BrokerOrder[];
   error?: string;
+}
+
+export interface BacktestCell {
+  cell: string;
+  threshold: number;
+  bear?: number;
+  bearWeight?: number;
+  abstained: number;
+  ordersPlaced: number;
+  ordersFilled: number;
+  trades: number;
+  netPnlUsd: number;
+}
+export interface BacktestTrade {
+  day: string;
+  stratum: string;
+  ticker: string;
+  side: string;
+  qty: number;
+  entryPrice: number;
+  exitPrice: number;
+  pnlUsd: number;
+  exitReason: string;
+}
+export interface BacktestResponse {
+  available: boolean;
+  tag?: string;
+  generatedAt?: string | null;
+  cells?: BacktestCell[];
+  tradeLogCell?: string | null;
+  trades?: BacktestTrade[];
 }
