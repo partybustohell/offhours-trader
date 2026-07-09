@@ -480,13 +480,17 @@ export async function sweepCommand(
   noBlackout = false,
 ): Promise<void> {
   const sample = loadSample();
+  // The backtest tick loop selects its QUOTE feed from BACKTEST_QUOTE_FEED
+  // (backtest-episode.ts), NOT config.data_feed — so --feed must set the env var
+  // (inherited by spawned episodes) or the quotes stay IEX (blind off-hours ->
+  // "no quote"). Set both: the env for the quote sim, cfg.data_feed for the
+  // executor's session-gate. This is what makes --feed sip actually switch feeds.
+  if (feedOverride) process.env.BACKTEST_QUOTE_FEED = feedOverride;
   // The backtest exercises the OFF-HOURS thesis (traded during premarket/
   // afterhours), so enable those sessions regardless of the live config's
-  // operational toggle — else the executor no-ops and nothing places. Feed
-  // override (does NOT touch config.yaml): IEX is too thin to fill this window,
-  // so a signal sweep needs SIP for a trading baseline. --no-blackout relaxes
-  // the entry-timing gate so entries can place in the thin off-hours ticks
-  // where the historical SIP fills are (else the baseline never trades).
+  // operational toggle — else the executor no-ops and nothing places.
+  // --no-blackout relaxes the entry-timing gate so entries can place in the thin
+  // off-hours ticks where the historical fills are (else the baseline never trades).
   const cfg: Config = {
     ...loadConfig(),
     ...(feedOverride ? { data_feed: feedOverride } : {}),
