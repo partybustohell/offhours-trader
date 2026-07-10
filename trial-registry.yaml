@@ -1,18 +1,43 @@
 # Typed trial registry — the machine-readable source of truth for the quant
 # testing plan (docs/QUANT-TESTING-PLAN.md). Every ALPHA-signal test is
-# pre-registered here BEFORE its results are read. `pnpm preflight` refuses to
-# start if an ENABLED alpha flag has no matching type:alpha row. nTrials for the
-# deflated-Sharpe multiple-testing gate = the count of type:alpha rows.
+# pre-registered here BEFORE its results are read. Two gates enforce it:
+# `pnpm preflight` refuses to start if an ENABLED alpha flag has no type:alpha
+# row whose `flag` matches exactly, and `backtest.ts sweep` refuses to run a
+# search whose flags have no type:alpha coverage (`flag` or `flags` list).
+#
+# Field semantics:
+#   date   = registration date (when the row was written), NOT the data window.
+#   window = data window evaluated, e.g. "2026-01-01..2026-07-01".
+#   cells  = evaluated config cells the row covers (default 1). nTrials for the
+#            deflated-Sharpe multiple-testing gate = sum of `cells` over
+#            type:alpha rows. Counting is PER CELL: every priced evaluation of
+#            a config cell on the window counts, including re-runs under
+#            changed harness/gate settings and runs later judged invalid
+#            (over-counting only raises the DSR benchmark; under-counting is
+#            the failure mode).
+#   flags  = additional flags a campaign row covers. Registers BACKTEST SEARCH
+#            only; enabling a signal LIVE requires a dedicated row whose `flag`
+#            is that signal's config path.
 #
 # To test a signal: add a row { flag: <config path>, type: alpha, status:
 # pre-registered, enabledDate, horizonDays, targetActiveN } BEFORE enabling it.
+# To run a backtest search: add (or bump `cells` on) a campaign row BEFORE
+# reading results. Post-hoc registrations are a rule violation — mark them.
 trials:
   - id: rev2-sweep
-    date: "2026-01"
+    date: "2026-07-09"
+    window: "2026-01-01..2026-07-01"
     flag: conviction_threshold
+    flags: [agent_weights.bear]
     type: alpha
+    cells: 33
     status: complete
-    notes: "Jan-Jun 2026 threshold sweep -> 0.55 shipped; no positive edge established at any threshold."
+    notes: >-
+      Threshold x bear-weight search on the 50-episode window: 18-cell rev1
+      grid (6 thresholds x 3 bear weights, tag defaults) + 15-cell rev2 5x3
+      replay -> 0.55 shipped; no positive edge established at any threshold.
+      Date previously recorded as "2026-01" — that was the data-window start,
+      not the registration date; corrected 2026-07-10.
   - id: quant-p0-guardrails
     date: "2026-07-09"
     flag: p0-guardrails
@@ -24,4 +49,76 @@ trials:
     flag: p1-p3-machinery
     type: guardrail
     status: shipped-flag-off
-    notes: "All P1-P3 signals built inert. Enabling ANY signal requires a new type:alpha row for its specific flag first."
+    notes: >-
+      All P1-P3 signals built inert in the LIVE config. Backtest signal-toggle
+      sweeps HAVE since been run against these flags (rows sig-sweep-1-6 and
+      sig7-sweep). Enabling ANY signal live still requires a new type:alpha row
+      for its specific flag first.
+  - id: sig-sweep-1-6
+    date: "2026-07-10"
+    window: "2026-01-01..2026-07-01"
+    flag: signal-toggle-sweep
+    flags:
+      - signals.anti_chase
+      - signals.amihud
+      - signals.dispersion
+      - signals.trend_gate
+      - signals.gap
+      - signals.low_vol
+      - regime.trend
+      - regime.vol
+      - regime.gross
+      - portfolio.target_vol
+      - portfolio.inverse_vol
+      - execution.cost_scalar
+      - execution.participation
+    type: alpha
+    cells: 59
+    status: invalid
+    notes: >-
+      REGISTERED POST-HOC (runs 2026-07-09) — rule violation, logged for the
+      honest nTrials count. Tags sig1-sig6: baseline + one-signal-on cells at
+      threshold 0.55 / bear 1.2. Priced cells: sig1 14, sig2 3, sig3 14,
+      sig4 14, sig5 14, sig6 0 (budget pass only). Broken-harness runs
+      (BACKTEST_QUOTE_FEED unset -> IEX quote-blind until d1b5196, entry
+      blackout on, aborted episodes); results are NOT valid evidence for any
+      signal, but the cells were evaluated and count as trials.
+  - id: sig7-sweep
+    date: "2026-07-10"
+    window: "2026-01-01..2026-07-01"
+    flag: signal-toggle-sweep
+    flags:
+      - signals.anti_chase
+      - signals.amihud
+      - signals.dispersion
+      - signals.trend_gate
+      - signals.gap
+      - signals.low_vol
+      - regime.trend
+      - regime.vol
+      - regime.gross
+      - portfolio.target_vol
+      - portfolio.inverse_vol
+      - execution.cost_scalar
+      - execution.participation
+    type: alpha
+    cells: 14
+    status: complete-confounded
+    notes: >-
+      REGISTERED POST-HOC (run 2026-07-09). Tag sig7: baseline + 13 one-signal
+      cells, SIP feed, no-blackout. Baseline completed 41 episodes vs 50 in
+      signal cells — sweep-results.json compares UNPAIRED totals, and failures
+      censor exactly the would-trade days, so per-signal differences are a
+      missing-episode artifact. No keep/kill verdict is valid until re-run
+      with paired episode sets.
+  - id: sip-guard-reruns
+    date: "2026-07-10"
+    window: "2026-01-01..2026-07-01"
+    flag: headline-reruns
+    type: alpha
+    cells: 4
+    status: complete
+    notes: >-
+      REGISTERED POST-HOC (runs 2026-07-09). Headline replays of the shipped
+      config under feed/guard variants: tags v2-sip, v3-sip, v3b-sip,
+      v3c-guard. Each is a distinct evaluated cell on the same window.

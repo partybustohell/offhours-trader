@@ -32,7 +32,7 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import Anthropic from '@anthropic-ai/sdk';
 import { loadConfig, type Config } from '../src/config.js';
-import { alphaTrialCount, loadTrialRegistry } from '../src/trial-registry.js';
+import { alphaTrialCount, loadTrialRegistry, unregisteredSweepFlags } from '../src/trial-registry.js';
 import { buildCandidates } from '../src/candidates.js';
 import { runNominations, type Scans } from '../src/agents/nominate.js';
 import { runVerdicts, type DailyBar } from '../src/agents/verdicts.js';
@@ -388,6 +388,8 @@ interface SweepCell {
   id: string;
   threshold: number;
   bearWeight: number;
+  /** Alpha flag under test (signal-toggle cells) — checked against the trial registry. */
+  flag?: string;
   /** Optional deep config override, e.g. to enable one signal (signal-toggle cells). */
   patch?: (c: Config) => Config;
 }
@@ -432,7 +434,7 @@ export const SIGNAL_ENABLERS: { flag: string; patch: (c: Config) => Config }[] =
 export function signalToggleCells(threshold = 0.55, bearWeight = 1.2): SweepCell[] {
   return [
     { id: 'baseline', threshold, bearWeight },
-    ...SIGNAL_ENABLERS.map((e) => ({ id: `sig-${e.flag}`, threshold, bearWeight, patch: e.patch })),
+    ...SIGNAL_ENABLERS.map((e) => ({ id: `sig-${e.flag}`, threshold, bearWeight, flag: e.flag, patch: e.patch })),
   ];
 }
 
@@ -506,6 +508,34 @@ export async function sweepCommand(
   // aren't in the LLM prompt, so all cells share the cached LLM calls -> the
   // fresh-call budget stays ~baseline regardless of cell count.
   let cells = mode === 'signals' ? signalToggleCells(signalThreshold) : sweepCells();
+
+  // Pre-registration gate: the sweep is exactly where unregistered search
+  // happens, so refuse to run cells whose flags have no type:alpha registry
+  // coverage (docs/TRIAL-REGISTRY.md). --budget-only is exempt — the budget
+  // pass prices nothing and reads no economic results. Existence-only check:
+  // a NEW campaign over already-registered flags still requires appending a
+  // row (or bumping `cells`) before results are read.
+  if (!budgetOnly) {
+    const sweepFlags =
+      mode === 'signals'
+        ? cells.map((c) => c.flag).filter((f): f is string => f !== undefined)
+        : ['conviction_threshold', 'agent_weights.bear'];
+    const trials = loadTrialRegistry();
+    const unregistered = unregisteredSweepFlags(sweepFlags, trials);
+    if (unregistered.length > 0) {
+      console.error(
+        `sweep refused: no type:alpha row in trial-registry.yaml covers ` +
+          `${unregistered.join(', ')} — pre-register the campaign (flag or flags list) ` +
+          `before searching. See docs/TRIAL-REGISTRY.md.`,
+      );
+      process.exitCode = 1;
+      return;
+    }
+    log(
+      `trial registry: nTrials=${alphaTrialCount(trials)}; if this run is a new search ` +
+        `campaign, append a registry row (or bump cells) BEFORE reading results`,
+    );
+  }
 
   // Fresh-call budget FIRST: canonical judge-cache misses per cell (count-only
   // pass; nothing fetched, nothing persisted) plus probe arm 2 (2 calls per

@@ -57,7 +57,7 @@ async function main(): Promise<void> {
         `enabled alpha signal(s) not pre-registered in trial-registry.yaml: ${unreg.join(', ')} — add a type:alpha row BEFORE enabling (docs/QUANT-TESTING-PLAN.md)`,
       );
     } else {
-      ok(`trial registry: ${alphaTrialCount(trials)} alpha trial(s); no unregistered enabled signals`);
+      ok(`trial registry: nTrials=${alphaTrialCount(trials)} (summed alpha cells); no unregistered enabled signals`);
     }
   } catch (err) {
     blocker(`trial-registry.yaml invalid: ${err instanceof Error ? err.message : String(err)}`);

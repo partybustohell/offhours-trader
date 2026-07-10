@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ConfigSchema } from '../src/config.js';
 import { SIGNAL_ENABLERS, cellConfig, signalToggleCells } from '../scripts/backtest.js';
+import { loadTrialRegistry, unregisteredSweepFlags } from '../src/trial-registry.js';
 
 // The signal-toggle sweep MECHANISM (docs/QUANT-TESTING-PLAN.md Stage 1/2).
 // NOTE: for a toggle to actually move backtest results, the episode driver must
@@ -33,5 +34,21 @@ describe('signal-toggle sweep cells', () => {
     for (const cell of signalToggleCells()) {
       expect(() => ConfigSchema.parse(cellConfig(cfg, cell))).not.toThrow();
     }
+  });
+
+  it('every non-baseline cell carries its flag for the registry gate', () => {
+    for (const cell of signalToggleCells()) {
+      if (cell.id === 'baseline') expect(cell.flag).toBeUndefined();
+      else expect(cell.flag).toBe(cell.id.replace(/^sig-/, ''));
+    }
+  });
+
+  it('the checked-in registry covers the current sweep flags (gate stays in sync)', () => {
+    const trials = loadTrialRegistry();
+    const signalFlags = signalToggleCells()
+      .map((c) => c.flag)
+      .filter((f): f is string => f !== undefined);
+    expect(unregisteredSweepFlags(signalFlags, trials)).toEqual([]);
+    expect(unregisteredSweepFlags(['conviction_threshold', 'agent_weights.bear'], trials)).toEqual([]);
   });
 });
