@@ -115,6 +115,16 @@ Note: launchd `StartCalendarInterval` fires in the Mac's local timezone —
 adjust the hour if you are not in ET. (`launchctl` hour above assumes ET;
 for PT use 14.)
 
+**Keep the Mac awake.** launchd `StartInterval` jobs (the executor tick and
+GTC stop maintenance) do not fire while the Mac sleeps — a lid-closed laptop
+silently stops trading mid-session and resumes on wake. Either keep it on AC
+power with "Prevent automatic sleeping when the display is off" enabled
+(System Settings → Battery → Options, or `sudo pmset -c sleep 0`), or
+schedule a wake shortly before the trading day: `sudo pmset repeat
+wakeorpoweron MTWRF <09:00 ET converted to local time>`. The pmset times are
+local and static — re-pin after a US DST transition, same as the launchd
+times above.
+
 ## Known v1 limitations
 
 - Market holidays are treated as normal weekdays; Alpaca rejects those orders
@@ -125,7 +135,8 @@ for PT use 14.)
 - Extended-hours liquidity is thin and spreads are wide. The spread gate
   (`max_spread_bps`) skips bad quotes, but paper fills are optimistic compared
   to real extended-hours fills — treat paper results as an upper bound.
-- The dashboard has no auth. It binds to localhost; do not expose it.
+- The dashboard has no auth. The server binds 127.0.0.1 only (set `HOST` to
+  override deliberately, e.g. on a trusted network); do not expose it.
 
 ## Architecture
 
