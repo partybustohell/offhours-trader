@@ -48,6 +48,18 @@ backtest verdict is admissible, only the live soak is valid OOS. Record the
 LLM-training-cutoff-vs-window contamination as a standing caveat (undetectable by
 any probe).
 
+**Status (run 2026-07-10): the STOP branch is taken.** The positive controls
+failed to trip on two personas (sentiment divergence ≤ 0.05, fundamental 0.1;
+trip threshold 0.3) → the probe is **powerless** and arms 1–2 were skipped as
+uninterpretable. Cutoff verification: published training-data cutoff for
+claude-sonnet-5 and claude-opus-4-8 is **Jan 2026** → intrudes on the window;
+per the pre-registered rule any future headline must be the strictly
+post-cutoff sub-window (Feb 1 – Jul 1), with January labeled
+leakage-contaminated. Consequence: **no backtest verdict is admissible; the
+paper soak is the only valid OOS instrument.** Artifacts:
+`backtest-out/probe/{cutoff-note,controls,controls-fundamental}.json`; details
+in the REPORT.md Revision 3 addendum.
+
 ### Stage 1 — Build the counterfactual instrumentation
 The engineering that makes honest testing possible:
 1. **Signal-toggle backtest cells** — extend `cellConfig` in `scripts/backtest.ts`
@@ -82,9 +94,25 @@ anti-chase band-tightening, the volume guard, and the budget cascade (a gate
 freeing `deployedTodayUsd` shifts which later names clear the caps). Quote the
 `designWeightedEstimate`, **never the H-stratum** (high-dispersion days flatter
 trend/gap/dispersion). Slice per regime state.
-**Decide — KILL:** paired CI straddles 0, or favorable only in H, or only in one
-regime. **SURVIVE (→ soak candidate, not accept):** CI excludes 0 on the
-design-weighted series.
+
+**Validity preconditions (a comparison violating either is void, not a KILL):**
+(1) on/off cells must cover the **identical episode-day set** — totals over
+mismatched day sets are missing-episode artifacts, not signal effects; (2) the
+signal must have **actually fired**: count episodes with a nonzero paired diff
+(`nActive`). A cell where the toggle never changed any decision is **INERT —
+not tested**, and must be reported as such, never as a KILL or a "no adverse
+effect".
+
+**Power limit (stated so a KILL is not oversold):** at the current sample
+(~50 episodes, single-digit trades per cell), the paired-diff CI straddles 0
+with probability ≈ 1 *regardless of the signal's true effect*. A Stage-2 KILL
+therefore means "no evidence of edge at this n" — it licenses keeping the flag
+off, not a claim that the signal is harmful or worthless. Only `nActive ≥ 10`
+nonzero paired diffs makes a CI verdict worth recording; below that, record
+INSUFFICIENT-N.
+**Decide — KILL:** `nActive ≥ 10` and CI straddles 0, or favorable only in H,
+or only in one regime. **SURVIVE (→ soak candidate, not accept):** CI excludes
+0 on the design-weighted series.
 
 ### Stage 3 — Variance-sizing guardrails (backtest evidence admissible)
 `portfolio.target_vol`/`inverse_vol`/`cov`, `regime.vol`/`gross`. Their metric is
@@ -92,6 +120,23 @@ realized **book vol / max-drawdown**, driven by real price paths, **not** the
 optimistic fill model — so backtest evidence counts (still confirmed live).
 Score each against a **placebo: a uniform gross haircut of equal average
 magnitude**, on Sharpe.
+
+**Placebo, defined (so it cannot be improvised at read time):**
+1. **Magnitude** `c` = (total entry gross notional in the signal-ON re-run) ÷
+   (total entry gross notional in the baseline re-run), computed over the full
+   evaluation window from the same paired cells. `c` is estimated from the
+   signal arm — it is a *matched* control, not an independent one; write `c`
+   down (registry note) **before** scoring the placebo cell.
+2. **Application:** a third full re-run cell whose only config change is a
+   constant multiplier `c` on every entry's target notional, applied at the
+   same sizing step the signal scales, on **every** decision (not just
+   signal-active ones), through the same caps/floor/budget cascade.
+3. **Metric:** Sharpe of the per-episode net-P&L series (plus the Stage-3
+   book-vol / max-drawdown criteria), stratum handling identical to Stage 2
+   (design-weighted; never H alone).
+4. **Comparison:** the signal must beat the placebo cell on Sharpe at equal
+   average gross. Equal Sharpe = the signal is exposure reduction, not skill —
+   KILL.
 **Decide — KEEP-candidate:** cuts book vol/drawdown ≥10–15% for a return give-up
 whose CI isn't materially negative, AND beats the placebo. **KILL:** shaves
 return without shrinking drawdown, or fails to beat the placebo (it was just

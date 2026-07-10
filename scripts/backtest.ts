@@ -357,11 +357,39 @@ export async function runCommand(
   concurrency = 4,
   offline = false,
   prices?: PriceTable,
+  countOnly = false,
 ): Promise<void> {
   const sample = loadSample();
   const cfg = loadConfig();
   const episodes = sample.episodes.filter((e) => fileExists(prepPath(e.day)));
   if (episodes.length === 0) throw new Error('no prep files found — run precompute first');
+  // --count-only: fresh-call budget pass under the SHIPPED config (same
+  // discipline as sweepCommand's budget pass) — nothing fetched, nothing priced.
+  if (countOnly) {
+    const baseDir = path.join(tagDir(tag), 'budget');
+    await runPhaseB(episodes, {
+      baseDir,
+      cfg,
+      haltPolicy,
+      concurrency,
+      offline,
+      countOnly: true,
+    });
+    let judge = 0;
+    let other = 0;
+    for (const episode of episodes) {
+      const budget = readJson<{ judgeMisses: number; otherMisses: number }>(
+        path.join(baseDir, episode.day, 'budget.json'),
+      );
+      judge += budget?.judgeMisses ?? 0;
+      other += budget?.otherMisses ?? 0;
+    }
+    console.log(
+      `\nFRESH-CALL BUDGET '${tag}': judge-cache misses ${judge} across ${episodes.length} episodes ` +
+        `(limit ${SWEEP_BUDGET_LIMIT}; non-judge misses ${other} reported, not budgeted)`,
+    );
+    return;
+  }
   log(`Phase B '${tag}' (${haltPolicy}): ${episodes.length} episodes, concurrency ${concurrency}`);
   const { completed, failed } = await runPhaseB(episodes, {
     baseDir: tagDir(tag),
@@ -746,7 +774,14 @@ async function main(): Promise<void> {
     if (haltPolicy !== 'auto-resume' && haltPolicy !== 'stay-halted') {
       throw new Error(`invalid --halt-policy ${haltPolicy}`);
     }
-    await runCommand(tag, haltPolicy, numFlag('concurrency') ?? 4, hasFlag('offline'), loadPrices());
+    await runCommand(
+      tag,
+      haltPolicy,
+      numFlag('concurrency') ?? 4,
+      hasFlag('offline'),
+      loadPrices(),
+      hasFlag('count-only'),
+    );
     return;
   }
   if (cmd === 'sweep') {
