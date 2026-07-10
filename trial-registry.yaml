@@ -4,6 +4,8 @@
 # `pnpm preflight` refuses to start if an ENABLED alpha flag has no type:alpha
 # row whose `flag` matches exactly, and `backtest.ts sweep` refuses to run a
 # search whose flags have no type:alpha coverage (`flag` or `flags` list).
+# Both gates additionally require the covering row to carry a `mechanism`
+# statement (below) before it authorizes NEW work.
 #
 # Field semantics:
 #   date   = registration date (when the row was written), NOT the data window.
@@ -18,11 +20,21 @@
 #   flags  = additional flags a campaign row covers. Registers BACKTEST SEARCH
 #            only; enabling a signal LIVE requires a dedicated row whose `flag`
 #            is that signal's config path.
+#   mechanism = REQUIRED for a row to authorize NEW work (a live enable or a
+#            new backtest search). Three sentences, each >= 5 words:
+#              counterparty: who is on the other side of the trade
+#              whyTheyPay:   why they systematically lose or pay
+#              friction:     what stops professionals from closing it
+#            If these cannot be written down, the idea is parameter-fishing
+#            and must not enter the registry. Legacy rows without a mechanism
+#            still count toward nTrials (history is history) but no longer
+#            authorize new sweeps or enables — the gates refuse them.
 #
 # To test a signal: add a row { flag: <config path>, type: alpha, status:
-# pre-registered, enabledDate, horizonDays, targetActiveN } BEFORE enabling it.
-# To run a backtest search: add (or bump `cells` on) a campaign row BEFORE
-# reading results. Post-hoc registrations are a rule violation — mark them.
+# pre-registered, mechanism, enabledDate, horizonDays, targetActiveN } BEFORE
+# enabling it. To run a backtest search: add (or bump `cells` on) a campaign
+# row WITH a mechanism BEFORE reading results. Post-hoc registrations are a
+# rule violation — mark them.
 trials:
   - id: rev2-sweep
     date: "2026-07-09"

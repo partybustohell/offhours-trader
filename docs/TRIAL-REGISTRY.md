@@ -24,6 +24,16 @@ Field semantics (yaml):
   search only**. Enabling a signal **live** requires a dedicated row whose
   `flag` is that signal's config path — the preflight gate matches `flag`
   exactly and ignores `flags` lists.
+- `mechanism` — the hypothesis's economic mechanism, stated **before** the row
+  can authorize new work. Three sentences (each ≥ 5 words — a sentence floor
+  to reject placeholders, not a quality grade):
+  - `counterparty` — who is on the other side of the trade;
+  - `whyTheyPay` — why they systematically lose or pay;
+  - `friction` — what stops professionals from closing it.
+  If those three sentences cannot be written down, the idea is
+  parameter-fishing and the registry would only record another kill. Legacy
+  rows without a mechanism keep counting toward `nTrials` (history is
+  history) but **no longer authorize** new sweeps or live enables.
 
 Rules:
 
@@ -41,10 +51,12 @@ Rules:
   `min_trades_for_economic_claim` (config, default 50); the report enforces
   this. The deflated Sharpe uses the summed cell count of `alpha`-type rows.
 - **Enforcement**: `pnpm preflight` blocks an enabled live alpha flag with no
-  exact-`flag` alpha row; `backtest.ts sweep` refuses to run a search whose
-  flags have no alpha coverage (`flag` or `flags`). The sweep gate checks
-  existence only — a new campaign over already-registered flags still
-  requires appending a row (or bumping `cells`) before results are read.
+  exact-`flag` alpha row, and blocks one whose row(s) lack a `mechanism`
+  statement; `backtest.ts sweep` refuses to run a search whose flags have no
+  alpha coverage (`flag` or `flags`), and refuses one whose coverage is
+  entirely mechanism-less. A new campaign over already-registered flags still
+  requires appending a row (or bumping `cells`) before results are read — and
+  that new row must carry the mechanism.
 
 | # | date (registered) | window | tag | change | type | cells | result (registered before reading?) | notes |
 |---|------|--------|-----|--------|------|-------|--------------------------------------|-------|

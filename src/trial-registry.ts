@@ -4,12 +4,27 @@
 // to trade, a backtest sweep over unregistered flags refuses to run, and
 // nTrials for the deflated-Sharpe gate is the sum of `cells` over alpha rows
 // (per-cell counting; a row without `cells` counts as 1).
+//
+// Mechanism gate: an alpha row authorizes NEW work (a live enable, a new
+// sweep) only if it states the hypothesis's economic mechanism in three
+// sentences — who is on the other side, why they lose or pay, what friction
+// stops professionals from closing it. A hypothesis that cannot answer those
+// is parameter-fishing and the registry would only record another kill.
+// Legacy rows without a mechanism still count toward nTrials (history is
+// history) but no longer authorize new searches or enables.
 // See docs/QUANT-TESTING-PLAN.md and docs/TRIAL-REGISTRY.md.
 import fs from 'node:fs';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import type { Config } from './config.js';
+
+export const MechanismSchema = z.object({
+  counterparty: z.string(), // who is on the other side of the trade
+  whyTheyPay: z.string(), // why they systematically lose or pay
+  friction: z.string(), // what stops professionals from closing it
+});
+export type Mechanism = z.infer<typeof MechanismSchema>;
 
 export const TrialSchema = z.object({
   id: z.string(),
@@ -20,6 +35,7 @@ export const TrialSchema = z.object({
   window: z.string().optional(), // data window evaluated, e.g. "2026-01-01..2026-07-01"
   cells: z.number().int().positive().optional(), // evaluated config cells this row covers; default 1
   flags: z.array(z.string()).optional(), // additional flags a campaign row covers (backtest-search registration only)
+  mechanism: MechanismSchema.optional(), // required for a row to AUTHORIZE new work; optional in the schema so legacy rows still parse
   enabledDate: z.string().optional(),
   horizonDays: z.number().optional(),
   targetActiveN: z.number().optional(),
@@ -79,6 +95,80 @@ export function registeredSweepFlags(trials: Trial[]): Set<string> {
 export function unregisteredSweepFlags(flags: string[], trials: Trial[]): string[] {
   const registered = registeredSweepFlags(trials);
   return [...new Set(flags)].filter((f) => !registered.has(f));
+}
+
+/** A mechanism answer must be a sentence, not a placeholder ("tbd" fails). */
+export const MECHANISM_MIN_WORDS = 5;
+
+const MECHANISM_QUESTIONS: { key: keyof Mechanism; question: string }[] = [
+  { key: 'counterparty', question: 'who is on the other side of the trade' },
+  { key: 'whyTheyPay', question: 'why they systematically lose or pay' },
+  { key: 'friction', question: 'what friction stops professionals from closing it' },
+];
+
+/**
+ * Why this alpha row cannot authorize new work, as human-readable problems.
+ * Empty result = the mechanism statement is complete. Guardrail rows are risk
+ * controls, not edge hypotheses — they never need a mechanism. The word floor
+ * is a sentence floor, not a quality check: it exists to reject "tbd", not to
+ * grade the hypothesis.
+ */
+export function mechanismProblems(t: Trial): string[] {
+  if (t.type !== 'alpha') return [];
+  if (!t.mechanism) {
+    return MECHANISM_QUESTIONS.map((q) => `mechanism.${q.key} missing — ${q.question}`);
+  }
+  const out: string[] = [];
+  for (const { key, question } of MECHANISM_QUESTIONS) {
+    const words = t.mechanism[key].trim().split(/\s+/).filter(Boolean);
+    if (words.length < MECHANISM_MIN_WORDS) {
+      out.push(`mechanism.${key} needs a sentence (>=${MECHANISM_MIN_WORDS} words) — ${question}`);
+    }
+  }
+  return out;
+}
+
+const authorizesWork = (t: Trial): boolean => t.type === 'alpha' && mechanismProblems(t).length === 0;
+
+/**
+ * Sweep flags whose registry coverage is entirely mechanism-less: registered
+ * (so the existence gate passes) but no covering alpha row states who is on
+ * the other side, why they pay, and what friction protects the edge. A
+ * non-empty result refuses the sweep — the fix is appending a campaign row
+ * WITH a mechanism, which is the point: no new search without the three
+ * sentences. Flags with no coverage at all are `unregisteredSweepFlags`'s job
+ * (that gate fires first) and are not reported here.
+ */
+export function sweepFlagsLackingMechanism(flags: string[], trials: Trial[]): string[] {
+  const authorized = new Set<string>();
+  for (const t of trials) {
+    if (!authorizesWork(t)) continue;
+    authorized.add(t.flag);
+    for (const f of t.flags ?? []) authorized.add(f);
+  }
+  const registered = registeredSweepFlags(trials);
+  return [...new Set(flags)].filter((f) => registered.has(f) && !authorized.has(f));
+}
+
+/**
+ * Enabled alpha flags that are registered (exact `flag` match) but where no
+ * matching row carries a complete mechanism statement. A non-empty result is a
+ * preflight BLOCKER. Unregistered flags are `unregisteredEnabledAlphaFlags`'s
+ * job and are not double-reported here. Campaign `flags` lists are ignored,
+ * matching the live-enable gate's exact-flag semantics.
+ */
+export function enabledAlphaFlagsLackingMechanism(cfg: Config, trials: Trial[]): string[] {
+  const rowsByFlag = new Map<string, Trial[]>();
+  for (const t of trials) {
+    if (t.type !== 'alpha') continue;
+    rowsByFlag.set(t.flag, [...(rowsByFlag.get(t.flag) ?? []), t]);
+  }
+  return ALPHA_FLAGS.filter((f) => {
+    if (!f.enabled(cfg)) return false;
+    const rows = rowsByFlag.get(f.flag);
+    if (!rows) return false; // unregistered — the existence gate reports it
+    return !rows.some(authorizesWork);
+  }).map((f) => f.flag);
 }
 
 /**
