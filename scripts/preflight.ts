@@ -10,6 +10,7 @@ import { thesisPath, readJsonIfExists } from '../src/paths.js';
 import { AlpacaBroker } from '../src/broker/client.js';
 import {
   alphaTrialCount,
+  enabledAlphaFlagsLackingMechanism,
   loadTrialRegistry,
   unregisteredEnabledAlphaFlags,
 } from '../src/trial-registry.js';
@@ -47,17 +48,28 @@ async function main(): Promise<void> {
   if (cfg.mode === 'live') warn('mode is LIVE — real money. Confirm this is intended.');
   if (cfg.mode === 'dry-run') ok('mode dry-run: orders are logged, never sent (safe)');
 
-  // Trial-registry gate: an ENABLED alpha signal must be pre-registered, so
-  // multiple-testing discipline is enforced, not just documented.
+  // Trial-registry gate: an ENABLED alpha signal must be pre-registered AND
+  // its row must state the economic mechanism, so multiple-testing discipline
+  // is enforced, not just documented.
   try {
     const trials = loadTrialRegistry();
     const unreg = unregisteredEnabledAlphaFlags(cfg, trials);
+    const noMech = enabledAlphaFlagsLackingMechanism(cfg, trials);
     if (unreg.length > 0) {
       blocker(
         `enabled alpha signal(s) not pre-registered in trial-registry.yaml: ${unreg.join(', ')} — add a type:alpha row BEFORE enabling (docs/QUANT-TESTING-PLAN.md)`,
       );
-    } else {
-      ok(`trial registry: nTrials=${alphaTrialCount(trials)} (summed alpha cells); no unregistered enabled signals`);
+    }
+    if (noMech.length > 0) {
+      blocker(
+        `enabled alpha signal(s) registered without a mechanism statement: ${noMech.join(', ')} — the row needs mechanism.{counterparty,whyTheyPay,friction}: ` +
+          `who is on the other side; why they lose or pay; what friction stops professionals from closing it (docs/TRIAL-REGISTRY.md)`,
+      );
+    }
+    if (unreg.length === 0 && noMech.length === 0) {
+      ok(
+        `trial registry: nTrials=${alphaTrialCount(trials)} (summed alpha cells); enabled signals all registered with mechanism statements`,
+      );
     }
   } catch (err) {
     blocker(`trial-registry.yaml invalid: ${err instanceof Error ? err.message : String(err)}`);

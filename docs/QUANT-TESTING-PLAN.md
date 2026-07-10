@@ -172,9 +172,12 @@ clear DSR at the inflated `nTrials` to ship.
 
 ## One-signal-at-a-time protocol
 
-One signal at a time; pre-register (enable date, **fixed horizon, fixed N**)
-before reading; recalibrate `conviction_threshold` after any score-affecting
-change (and log that as its own row). **No sequential peeking** — no early accept
+One signal at a time; pre-register (enable date, **fixed horizon, fixed N**,
+and the **three-sentence mechanism** — who is on the other side; why they lose
+or pay; what friction stops professionals from closing it — without which the
+gates refuse the row as parameter-fishing) before reading; recalibrate
+`conviction_threshold` after any score-affecting change (and log that as its
+own row). **No sequential peeking** — no early accept
 on a good week, no disable on a bad week; any mid-soak toggle restarts the count.
 Test order (cheapest-to-disprove / most data-dense / safest first):
 

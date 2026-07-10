@@ -40,7 +40,12 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import Anthropic from '@anthropic-ai/sdk';
 import { loadConfig, type Config } from '../src/config.js';
-import { alphaTrialCount, loadTrialRegistry, unregisteredSweepFlags } from '../src/trial-registry.js';
+import {
+  alphaTrialCount,
+  loadTrialRegistry,
+  sweepFlagsLackingMechanism,
+  unregisteredSweepFlags,
+} from '../src/trial-registry.js';
 import { buildCandidates } from '../src/candidates.js';
 import { runNominations, type Scans } from '../src/agents/nominate.js';
 import { runVerdicts, type DailyBar } from '../src/agents/verdicts.js';
@@ -830,6 +835,21 @@ export async function sweepCommand(
         `sweep refused: no type:alpha row in trial-registry.yaml covers ` +
           `${unregistered.join(', ')} — pre-register the campaign (flag or flags list) ` +
           `before searching. See docs/TRIAL-REGISTRY.md.`,
+      );
+      process.exitCode = 1;
+      return;
+    }
+    // Mechanism gate: coverage alone no longer authorizes a search. Some
+    // covering row must state the hypothesis's mechanism; legacy rows keep
+    // counting toward nTrials but cannot feed new work.
+    const lackingMechanism = sweepFlagsLackingMechanism(sweepFlags, trials);
+    if (lackingMechanism.length > 0) {
+      console.error(
+        `sweep refused: registry coverage for ${lackingMechanism.join(', ')} lacks a mechanism ` +
+          `statement — append a campaign row with mechanism.{counterparty,whyTheyPay,friction} ` +
+          `(who is on the other side; why they lose or pay; what friction stops professionals ` +
+          `from closing it). If those three sentences cannot be written down, the idea is ` +
+          `parameter-fishing, not a hypothesis. See docs/TRIAL-REGISTRY.md.`,
       );
       process.exitCode = 1;
       return;
