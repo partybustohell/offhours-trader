@@ -488,6 +488,8 @@ describe('signalAttribution (paired full-re-run diff)', () => {
     const a = signalAttribution('signals.amihud', base, on, { seed: 42 });
     expect(a.flag).toBe('signals.amihud');
     expect(a.nPairs).toBe(2);
+    expect(a.pairedDays).toEqual(['2026-01-05', '2026-01-06']);
+    expect(a.droppedDays).toEqual({ baselineOnly: [], signalOnly: [] });
     expect(a.perEpisodeMarginalUsd).toEqual([-10, -10]); // signal-on minus baseline
     expect(a.meanMarginalUsd).toBeCloseTo(-10, 10);
     expect(a.bootstrap).toMatchObject({ low: -10, high: -10 }); // degenerate constant
@@ -497,6 +499,24 @@ describe('signalAttribution (paired full-re-run diff)', () => {
     const a = signalAttribution('x', base, [episode({ day: '2026-02-02', trades: [trade({ pnlUsd: 5 })] })]);
     expect(a.nPairs).toBe(0);
     expect(a.bootstrap).toBeNull();
+    expect(a.pairedDays).toEqual([]);
+    expect(a.droppedDays).toEqual({
+      baselineOnly: ['2026-01-05', '2026-01-06'],
+      signalOnly: ['2026-02-02'],
+    });
+  });
+
+  it('counts unpaired days on both sides instead of silently shrinking nPairs', () => {
+    // baseline missing 01-06 (a failed episode), signal-on missing 01-05.
+    const a = signalAttribution(
+      'x',
+      [base[0]!, episode({ day: '2026-01-07', trades: [trade({ pnlUsd: 20 })] })],
+      [on[1]!, episode({ day: '2026-01-07', trades: [trade({ pnlUsd: 30 })] })],
+    );
+    expect(a.nPairs).toBe(1);
+    expect(a.pairedDays).toEqual(['2026-01-07']);
+    expect(a.perEpisodeMarginalUsd).toEqual([10]);
+    expect(a.droppedDays).toEqual({ baselineOnly: ['2026-01-05'], signalOnly: ['2026-01-06'] });
   });
 });
 
