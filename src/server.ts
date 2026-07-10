@@ -344,6 +344,10 @@ process.on('unhandledRejection', (err) => {
   console.error('unhandledRejection:', err);
 });
 
-app.listen(PORT, () => {
-  console.log(`offhours-trader server listening on http://localhost:${PORT}`);
+// Bind loopback only by default: the dashboard has no auth and can edit the
+// config, so it must never be reachable from the network. HOST is an explicit
+// escape hatch for a trusted-network deployment.
+const HOST = process.env.HOST || '127.0.0.1';
+app.listen(PORT, HOST, () => {
+  console.log(`offhours-trader server listening on http://${HOST}:${PORT}`);
 });
