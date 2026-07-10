@@ -741,6 +741,17 @@ th.r {
   font-size: 11px;
   font-family: var(--font-mono);
 }
+.tag-stop {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.05em;
+  color: var(--amber);
+  background: var(--amber-dim);
+  padding: 1px 4px;
+  border-radius: 3px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
 .narr {
   font-family: var(--font-serif);
   font-size: 15px;

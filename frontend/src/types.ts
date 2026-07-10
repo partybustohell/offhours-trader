@@ -65,7 +65,10 @@ export interface BrokerOrder {
   ticker: string;
   side: 'buy' | 'sell';
   qty: number;
+  type?: string;
   limitPrice: number;
+  stopPrice?: number;
+  timeInForce?: string;
   status: string;
   submittedAt: string;
 }

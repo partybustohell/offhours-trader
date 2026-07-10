@@ -103,7 +103,7 @@ export default function PositionsView({ d }: { d: AppData }) {
                     <th>Ticker</th>
                     <th>Side</th>
                     <th className="r">Qty</th>
-                    <th className="r">Limit</th>
+                    <th className="r">Price</th>
                     <th>Status</th>
                   </tr>
                 </thead>
@@ -116,7 +116,20 @@ export default function PositionsView({ d }: { d: AppData }) {
                       </td>
                       <td>{o.side}</td>
                       <td className="r num">{o.qty}</td>
-                      <td className="r num">{fmtUsd(o.limitPrice)}</td>
+                      <td className="r num">
+                        {o.stopPrice != null ? (
+                          <span
+                            title={`${o.type ?? 'stop'} order · ${(o.timeInForce ?? '').toUpperCase()} · triggers at ${fmtUsd(o.stopPrice)}`}
+                          >
+                            {fmtUsd(o.stopPrice)}{' '}
+                            <span className="tag-stop">
+                              STOP{o.timeInForce === 'gtc' ? ' · GTC' : o.timeInForce === 'day' ? ' · DAY' : ''}
+                            </span>
+                          </span>
+                        ) : (
+                          fmtUsd(o.limitPrice)
+                        )}
+                      </td>
                       <td className="note">{o.status}</td>
                     </tr>
                   ))}

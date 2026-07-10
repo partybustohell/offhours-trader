@@ -135,7 +135,13 @@ export interface BrokerOrder {
   ticker: string;
   side: 'buy' | 'sell';
   qty: number;
+  /** Alpaca order type: 'limit' | 'stop' | 'stop_limit' | 'market' | ... */
+  type?: string;
   limitPrice: number;
+  /** Trigger price for stop / stop_limit orders; absent for plain limits. */
+  stopPrice?: number;
+  /** 'day' | 'gtc' | ...; distinguishes resting (gtc) from expiring (day) stops. */
+  timeInForce?: string;
   status: string;
   submittedAt: string;
   /** Our idempotency tag; prefixed 'entry-' or 'exit-' at placement. */

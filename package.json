@@ -8,6 +8,8 @@
     "tick": "tsx src/executor-loop.ts",
     "serve": "tsx src/server.ts",
     "seed": "tsx scripts/seed-demo.ts",
+    "ensure-stops": "tsx scripts/ensure-stops.ts",
+    "ensure-stops:apply": "tsx scripts/ensure-stops.ts --apply",
     "preflight": "tsx scripts/preflight.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",

@@ -3,6 +3,10 @@
 #   - pipeline:     once per day at 17:05 ET (evening off-hours thesis)
 #   - pipeline-rth: once per day at 09:00 ET (morning regular-session thesis)
 #   - executor:     every 15 minutes (no-ops outside enabled sessions)
+#   - ensure-stops: every 15 minutes; converts day-TIF protective stops on open
+#                   positions to GTC so protection persists across sessions.
+#                   Idempotent (a no-op once every position has a resting GTC
+#                   stop), self-healing, and not session-gated.
 # The plists are written to ~/Library/LaunchAgents but left UNLOADED. Loading
 # them starts recurring jobs that autonomously hit the market, so that step is
 # deliberately manual — see the printed instructions and the runbook.
@@ -43,6 +47,7 @@ LOCAL_TZ=$(date +%Z)
 PIPELINE_PLIST="$AGENTS/com.offhours.pipeline.plist"
 RTH_PIPELINE_PLIST="$AGENTS/com.offhours.pipeline-rth.plist"
 TICK_PLIST="$AGENTS/com.offhours.tick.plist"
+STOPS_PLIST="$AGENTS/com.offhours.ensure-stops.plist"
 
 cat > "$PIPELINE_PLIST" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -96,17 +101,37 @@ cat > "$TICK_PLIST" <<PLIST
 </dict></plist>
 PLIST
 
+# ensure-stops: every 15 minutes, converts any day-TIF (or missing) protective
+# stop on an open position to a resting GTC stop at the same trigger. Idempotent
+# and self-healing; runs 24/7 (GTC stops can be placed in any session).
+cat > "$STOPS_PLIST" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.offhours.ensure-stops</string>
+  <key>WorkingDirectory</key><string>$REPO</string>
+  <key>EnvironmentVariables</key>
+  <dict><key>PATH</key><string>$LAUNCH_PATH</string></dict>
+  <key>ProgramArguments</key>
+  <array><string>$PNPM</string><string>ensure-stops:apply</string></array>
+  <key>StartInterval</key><integer>900</integer>
+  <key>StandardOutPath</key><string>/tmp/offhours-ensure-stops.log</string>
+  <key>StandardErrorPath</key><string>/tmp/offhours-ensure-stops.log</string>
+</dict></plist>
+PLIST
+
 printf 'Wrote (UNLOADED), times converted to local %s:\n' "$LOCAL_TZ"
 printf '  %s  (evening off-hours thesis, 17:05 ET = %02d:%02d %s)\n' "$PIPELINE_PLIST" "$PIPE_H" "$PIPE_M" "$LOCAL_TZ"
 printf '  %s  (morning RTH thesis, 09:00 ET = %02d:%02d %s — only if regularhours enabled)\n' "$RTH_PIPELINE_PLIST" "$RTH_H" "$RTH_M" "$LOCAL_TZ"
 printf '  %s  (executor, every 15 min)\n' "$TICK_PLIST"
+printf '  %s  (GTC stop maintenance, every 15 min)\n' "$STOPS_PLIST"
 echo ""
 echo "These are NOT running yet. Before loading, complete the go-live runbook"
 echo "(docs/RUNBOOK.md) — at minimum: pnpm preflight passes, and you have soaked"
 echo "on paper. To start the recurring jobs:"
-echo "  launchctl load $PIPELINE_PLIST $RTH_PIPELINE_PLIST $TICK_PLIST"
+echo "  launchctl load $PIPELINE_PLIST $RTH_PIPELINE_PLIST $TICK_PLIST $STOPS_PLIST"
 echo "To stop them:"
-echo "  launchctl unload $PIPELINE_PLIST $RTH_PIPELINE_PLIST $TICK_PLIST"
+echo "  launchctl unload $PIPELINE_PLIST $RTH_PIPELINE_PLIST $TICK_PLIST $STOPS_PLIST"
 echo ""
 echo "Not on ET? The local times above are pinned to the current DST offset."
 echo "Re-run this installer (and reload) after a US DST transition to re-pin."

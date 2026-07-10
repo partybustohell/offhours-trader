@@ -134,7 +134,10 @@ interface AlpacaOrder {
   symbol: string;
   side: 'buy' | 'sell';
   qty: string;
+  type?: string | null;
   limit_price?: string | null;
+  stop_price?: string | null;
+  time_in_force?: string | null;
   status: string;
   submitted_at: string;
   client_order_id?: string | null;
@@ -158,7 +161,10 @@ function mapOrder(o: AlpacaOrder): BrokerOrder {
     ticker: o.symbol,
     side: o.side,
     qty: Number(o.qty),
+    type: o.type ?? undefined,
     limitPrice: o.limit_price == null ? 0 : Number(o.limit_price),
+    stopPrice: o.stop_price == null ? undefined : Number(o.stop_price),
+    timeInForce: o.time_in_force ?? undefined,
     status: o.status,
     submittedAt: o.submitted_at,
     clientOrderId: o.client_order_id ?? undefined,
