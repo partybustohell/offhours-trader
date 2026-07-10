@@ -542,6 +542,14 @@ export interface SignalAttribution {
   flag: string;
   /** episodes present in BOTH runs, paired by day. */
   nPairs: number;
+  /** days behind perEpisodeMarginalUsd, same order (signal-on day order). */
+  pairedDays: string[];
+  /**
+   * Days present in only one run, dropped from the pairing. Nonempty means one
+   * run is incomplete and the diff is computed on a censored subset — callers
+   * must surface this, not read nPairs as the full sample.
+   */
+  droppedDays: { baselineOnly: string[]; signalOnly: string[] };
   /** mean of (signal-on net − baseline net) per episode. */
   meanMarginalUsd: number;
   /** bootstrap CI on that mean; null when no paired episodes. */
@@ -563,15 +571,26 @@ export function signalAttribution(
   opts: EconomicsOpts = {},
 ): SignalAttribution {
   const baseByDay = new Map(baseline.map((e) => [e.day, episodeNetUsd(e)]));
+  const signalDays = new Set(signalOn.map((e) => e.day));
   const perEpisodeMarginalUsd: number[] = [];
+  const pairedDays: string[] = [];
+  const signalOnly: string[] = [];
   for (const e of signalOn) {
     const b = baseByDay.get(e.day);
-    if (b !== undefined) perEpisodeMarginalUsd.push(episodeNetUsd(e) - b);
+    if (b !== undefined) {
+      perEpisodeMarginalUsd.push(episodeNetUsd(e) - b);
+      pairedDays.push(e.day);
+    } else {
+      signalOnly.push(e.day);
+    }
   }
+  const baselineOnly = [...baseByDay.keys()].filter((d) => !signalDays.has(d)).sort();
   const n = perEpisodeMarginalUsd.length;
   return {
     flag,
     nPairs: n,
+    pairedDays,
+    droppedDays: { baselineOnly, signalOnly: signalOnly.sort() },
     meanMarginalUsd: n > 0 ? perEpisodeMarginalUsd.reduce((s, x) => s + x, 0) / n : 0,
     bootstrap: n > 0 ? bootstrapCi(perEpisodeMarginalUsd, opts.draws, opts.seed, opts.level) : null,
     perEpisodeMarginalUsd,

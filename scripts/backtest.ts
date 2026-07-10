@@ -22,6 +22,9 @@
 //                              (canonical-cache judge misses + probe arm 2)
 //                              and applies the pre-registered 0.55 threshold
 //                              floor if it exceeds 300
+//   sweep-aggregate --tag T    regenerate sweep-results.json (and, for signal
+//                              sweeps, signal-attribution.json) from the
+//                              episode results already on disk — runs nothing
 //   report --tag T [--tbill 0.043]
 //                              aggregate episode-result.json files ->
 //                              metrics.renderReport -> backtest-out/T/REPORT.md
@@ -65,6 +68,7 @@ import {
   walkForward,
   type EpisodeResult,
   type ReportMeta,
+  type SignalAttribution,
 } from '../src/backtest/metrics.js';
 import type { SampleFile, StoredDailyBar } from '../src/backtest/types.js';
 import {
@@ -288,16 +292,49 @@ export async function precomputeCommand(limit?: number, concurrency = 8): Promis
 
 // ---------- run (Phase B, child process per episode) ----------
 
-function spawnEpisode(argsFile: string, cwd: string): Promise<number> {
+const STDERR_TAIL_BYTES = 16_384;
+
+/**
+ * Spawn one episode child. stderr is teed: streamed through to the console AND
+ * kept (last 16 KiB) so a failed episode's cause survives as data — with plain
+ * stdio 'inherit' the reason scrolls away and the only durable record is the
+ * exit code (which censors exactly the would-trade days: fresh judge-LLM calls
+ * are what fail; abstained days never make them).
+ */
+function spawnEpisode(
+  argsFile: string,
+  cwd: string,
+): Promise<{ code: number; stderrTail: string }> {
   return new Promise((resolve, reject) => {
     const child = spawn(TSX_BIN, [EPISODE_SCRIPT, argsFile], {
       cwd,
       env: process.env,
-      stdio: ['ignore', 'inherit', 'inherit'],
+      stdio: ['ignore', 'inherit', 'pipe'],
+    });
+    const chunks: Buffer[] = [];
+    let bytes = 0;
+    child.stderr?.on('data', (chunk: Buffer) => {
+      process.stderr.write(chunk);
+      chunks.push(chunk);
+      bytes += chunk.length;
+      while (chunks.length > 1 && bytes - chunks[0]!.length >= STDERR_TAIL_BYTES) {
+        bytes -= chunks.shift()!.length;
+      }
     });
     child.on('error', reject);
-    child.on('close', (code) => resolve(code ?? 1));
+    child.on('close', (code) =>
+      resolve({
+        code: code ?? 1,
+        stderrTail: Buffer.concat(chunks).toString('utf8').slice(-STDERR_TAIL_BYTES),
+      }),
+    );
   });
+}
+
+/** Last non-empty stderr line — the one-line failure reason for summaries. */
+function lastStderrLine(stderrTail: string): string {
+  const lines = stderrTail.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
+  return lines[lines.length - 1] ?? '';
 }
 
 interface PhaseBOpts {
@@ -311,15 +348,25 @@ interface PhaseBOpts {
   skipExisting?: boolean;
 }
 
+export interface EpisodeFailure {
+  day: string;
+  exitCode: number;
+  /** last non-empty stderr line (usually the thrown error). */
+  reason: string;
+  stderrTail: string;
+}
+
 async function runPhaseB(
   episodes: { day: string; stratum: 'R' | 'H' }[],
   opts: PhaseBOpts,
-): Promise<{ completed: string[]; failed: string[] }> {
+): Promise<{ completed: string[]; failed: string[]; failures: EpisodeFailure[] }> {
   const completed: string[] = [];
   const failed: string[] = [];
+  const failures: EpisodeFailure[] = [];
   await mapPool(episodes, opts.concurrency, async (episode) => {
     const episodeDir = path.join(opts.baseDir, episode.day);
     const resultFile = path.join(episodeDir, 'episode-result.json');
+    const failureFile = path.join(episodeDir, 'episode-failure.json');
     if (opts.skipExisting && fileExists(resultFile)) {
       completed.push(episode.day);
       return;
@@ -341,14 +388,24 @@ async function runPhaseB(
     };
     const argsFile = path.join(episodeDir, 'episode-args.json');
     writeJsonFile(argsFile, args);
-    const code = await spawnEpisode(argsFile, episodeDir);
-    if (code === 0) completed.push(episode.day);
-    else {
+    const { code, stderrTail } = await spawnEpisode(argsFile, episodeDir);
+    if (code === 0) {
+      completed.push(episode.day);
+      fs.rmSync(failureFile, { force: true }); // stale marker from an earlier failed attempt
+    } else {
+      const failure: EpisodeFailure = {
+        day: episode.day,
+        exitCode: code,
+        reason: lastStderrLine(stderrTail),
+        stderrTail,
+      };
       failed.push(episode.day);
-      log(`episode ${episode.day} FAILED (exit ${code})`);
+      failures.push(failure);
+      writeJsonFile(failureFile, { ...failure, failedAt: new Date().toISOString() });
+      log(`episode ${episode.day} FAILED (exit ${code}): ${failure.reason}`);
     }
   });
-  return { completed, failed };
+  return { completed, failed, failures };
 }
 
 export async function runCommand(
@@ -391,7 +448,7 @@ export async function runCommand(
     return;
   }
   log(`Phase B '${tag}' (${haltPolicy}): ${episodes.length} episodes, concurrency ${concurrency}`);
-  const { completed, failed } = await runPhaseB(episodes, {
+  const { completed, failed, failures } = await runPhaseB(episodes, {
     baseDir: tagDir(tag),
     cfg,
     haltPolicy,
@@ -405,6 +462,10 @@ export async function runCommand(
     haltPolicy,
     completed: completed.sort(),
     failed: failed.sort(),
+    // per-day exit code + last stderr line; full tails in <day>/episode-failure.json
+    failures: failures
+      .map(({ day, exitCode, reason }) => ({ day, exitCode, reason }))
+      .sort((a, b) => (a.day < b.day ? -1 : 1)),
   });
   log(`Phase B done: ${completed.length} completed, ${failed.length} failed`);
   if (failed.length > 0) process.exitCode = 1;
@@ -495,6 +556,206 @@ function tradedPairCount(tag: string): number {
     for (const trade of episode.trades) pairs.add(`${episode.day}|${trade.ticker}`);
   }
   return pairs.size;
+}
+
+// ---------- sweep aggregation (intersection-restricted totals) ----------
+
+export interface SweepRow {
+  cell: string;
+  threshold: number;
+  bearWeight: number;
+  /** episodes counted in the totals = |sharedDays| (identical for every row). */
+  episodes: number;
+  /** episodes this cell actually completed (before the shared-day restriction). */
+  completedEpisodes: number;
+  abstained: number;
+  ordersPlaced: number;
+  ordersFilled: number;
+  fillRate: number | null;
+  trades: number;
+  netPnlTotalUsd: number;
+  judgeMissBudget: number;
+}
+
+export interface SweepResultsFile {
+  tag: string;
+  mode: 'threshold' | 'signals';
+  generatedAt: string;
+  /** days completed by EVERY cell; all row totals are restricted to these. */
+  sharedDays: string[];
+  /** per-cell days missing vs the union of completed days (loud, durable). */
+  missingByCell: Record<string, string[]>;
+  cells: SweepRow[];
+}
+
+/**
+ * Aggregate per-cell episode results into sweep-results.json. Totals are
+ * restricted to the INTERSECTION of completed episode days across cells:
+ * summing whatever episode-result.json files exist makes cells with different
+ * completed-day sets incomparable (a cell's "delta" is then mostly the missing
+ * days, not the config). A mismatch is reported loudly and persisted in
+ * missingByCell so partial coverage can't read as a clean comparison.
+ */
+export function aggregateSweep(
+  tag: string,
+  cells: { id: string; threshold: number; bearWeight: number }[],
+  mode: 'threshold' | 'signals',
+  judgeMissesByCell: Map<string, number>,
+): SweepResultsFile {
+  const resultsByCell = new Map(
+    cells.map((c) => [c.id, collectEpisodeResults(path.join(tagDir(tag), 'sweep', c.id))]),
+  );
+  const unionDays = [...new Set([...resultsByCell.values()].flat().map((e) => e.day))].sort();
+  const sharedDays = unionDays.filter((day) =>
+    cells.every((c) => resultsByCell.get(c.id)!.some((e) => e.day === day)),
+  );
+  const missingByCell: Record<string, string[]> = {};
+  for (const cell of cells) {
+    const have = new Set(resultsByCell.get(cell.id)!.map((e) => e.day));
+    const missing = unionDays.filter((d) => !have.has(d));
+    if (missing.length > 0) missingByCell[cell.id] = missing;
+  }
+  if (Object.keys(missingByCell).length > 0) {
+    console.error(
+      `\nWARNING: completed-episode days differ across sweep cells — totals restricted to the ` +
+        `${sharedDays.length}-day intersection (union ${unionDays.length}). Incomplete cells:`,
+    );
+    for (const [cellId, missing] of Object.entries(missingByCell)) {
+      console.error(`  ${cellId}: missing ${missing.length} day(s): ${missing.join(', ')}`);
+    }
+  }
+  if (sharedDays.length === 0) {
+    console.error('WARNING: no episode day was completed by every cell — all totals are over 0 episodes');
+  }
+  const shared = new Set(sharedDays);
+  const rows: SweepRow[] = cells.map((cell) => {
+    const all = resultsByCell.get(cell.id)!;
+    const results = all.filter((e) => shared.has(e.day));
+    const placed = results.reduce((s, r) => s + r.ordersPlaced, 0);
+    const filled = results.reduce((s, r) => s + r.ordersFilled, 0);
+    return {
+      cell: cell.id,
+      threshold: cell.threshold,
+      bearWeight: cell.bearWeight,
+      episodes: results.length,
+      completedEpisodes: all.length,
+      abstained: results.filter((r) => r.abstained).length,
+      ordersPlaced: placed,
+      ordersFilled: filled,
+      fillRate: placed > 0 ? filled / placed : null,
+      trades: results.reduce((s, r) => s + r.trades.length, 0),
+      netPnlTotalUsd: results.reduce((s, r) => s + episodeNetUsd(r), 0),
+      judgeMissBudget: judgeMissesByCell.get(cell.id) ?? 0,
+    };
+  });
+  const file: SweepResultsFile = {
+    tag,
+    mode,
+    generatedAt: new Date().toISOString(),
+    sharedDays,
+    missingByCell,
+    cells: rows,
+  };
+  writeJsonFile(path.join(tagDir(tag), 'sweep-results.json'), file);
+  return file;
+}
+
+function printSweepTable(rows: SweepRow[]): void {
+  console.log('\ncell      thr   bear  eps  done  abst  placed  filled  fillRate  trades  netPnl');
+  for (const r of rows) {
+    console.log(
+      `${r.cell.padEnd(8)}  ${r.threshold.toFixed(2)}  ${r.bearWeight.toFixed(1)}   ${String(r.episodes).padStart(3)}  ${String(r.completedEpisodes).padStart(4)}  ${String(r.abstained).padStart(4)}  ${String(r.ordersPlaced).padStart(6)}  ${String(r.ordersFilled).padStart(6)}  ${r.fillRate === null ? '     n/a' : (100 * r.fillRate).toFixed(1).padStart(7) + '%'}  ${String(r.trades).padStart(6)}  ${r.netPnlTotalUsd.toFixed(2).padStart(8)}`,
+    );
+  }
+}
+
+// ---------- signal attribution artifact ----------
+
+export const attributionVerdict = (a: SignalAttribution): string =>
+  !a.bootstrap
+    ? 'no data'
+    : a.bootstrap.low > 0
+      ? 'favorable → soak candidate'
+      : a.bootstrap.high < 0
+        ? 'unfavorable → KILL'
+        : 'CI straddles 0 → KILL';
+
+export interface SignalAttributionFile {
+  tag: string;
+  generatedAt: string;
+  baselineEpisodes: number;
+  signals: {
+    flag: string;
+    cell: string;
+    nPairs: number;
+    droppedDays: { baselineOnly: string[]; signalOnly: string[] };
+    meanMarginalUsd: number;
+    bootstrap: { low: number; high: number; level: number } | null;
+    verdict: string;
+    /** the paired per-day diff series behind the CI — the decision metric. */
+    perDay: { day: string; baselineNetUsd: number; signalNetUsd: number; marginalUsd: number }[];
+  }[];
+}
+
+/**
+ * Compute per-signal paired attribution vs the baseline cell and persist it as
+ * signal-attribution.json next to sweep-results.json (the diff series + CI is
+ * the Stage-2 decision metric; console output alone is not a durable artifact).
+ * Attribution pairs each signal cell with baseline on THEIR shared days;
+ * dropped unpaired days are recorded per signal and warned about.
+ */
+export function writeSignalAttribution(tag: string): SignalAttributionFile | null {
+  const sweepRoot = path.join(tagDir(tag), 'sweep');
+  const baseline = collectEpisodeResults(path.join(sweepRoot, 'baseline'));
+  if (baseline.length === 0) {
+    console.error(`no baseline episodes under ${sweepRoot}/baseline — signal-attribution.json not written`);
+    return null;
+  }
+  let cellIds: string[] = [];
+  try {
+    cellIds = fs.readdirSync(sweepRoot).filter((d) => d.startsWith('sig-')).sort();
+  } catch {
+    cellIds = [];
+  }
+  const baseNetByDay = new Map(baseline.map((e) => [e.day, episodeNetUsd(e)]));
+  const signals: SignalAttributionFile['signals'] = [];
+  for (const cellId of cellIds) {
+    const flag = cellId.replace(/^sig-/, '');
+    const a = signalAttribution(flag, baseline, collectEpisodeResults(path.join(sweepRoot, cellId)));
+    const dropped = a.droppedDays.baselineOnly.length + a.droppedDays.signalOnly.length;
+    if (dropped > 0) {
+      console.error(
+        `WARNING: ${cellId}: ${dropped} unpaired day(s) dropped from attribution ` +
+          `(baseline-only: ${a.droppedDays.baselineOnly.length}, signal-only: ${a.droppedDays.signalOnly.length}) — ` +
+          `nPairs=${a.nPairs} is a censored subset`,
+      );
+    }
+    signals.push({
+      flag,
+      cell: cellId,
+      nPairs: a.nPairs,
+      droppedDays: a.droppedDays,
+      meanMarginalUsd: a.meanMarginalUsd,
+      bootstrap: a.bootstrap
+        ? { low: a.bootstrap.low, high: a.bootstrap.high, level: a.bootstrap.level }
+        : null,
+      verdict: attributionVerdict(a),
+      perDay: a.pairedDays.map((day, i) => ({
+        day,
+        baselineNetUsd: baseNetByDay.get(day)!,
+        signalNetUsd: baseNetByDay.get(day)! + a.perEpisodeMarginalUsd[i]!,
+        marginalUsd: a.perEpisodeMarginalUsd[i]!,
+      })),
+    });
+  }
+  const file: SignalAttributionFile = {
+    tag,
+    generatedAt: new Date().toISOString(),
+    baselineEpisodes: baseline.length,
+    signals,
+  };
+  writeJsonFile(path.join(tagDir(tag), 'signal-attribution.json'), file);
+  return file;
 }
 
 export async function sweepCommand(
@@ -599,23 +860,10 @@ export async function sweepCommand(
   }
 
   // Real pass: Phase B per cell through the shared canonical judge cache.
-  const rows: {
-    cell: string;
-    threshold: number;
-    bearWeight: number;
-    episodes: number;
-    abstained: number;
-    ordersPlaced: number;
-    ordersFilled: number;
-    fillRate: number | null;
-    trades: number;
-    netPnlTotalUsd: number;
-    judgeMissBudget: number;
-  }[] = [];
   for (const cell of cells) {
     const baseDir = path.join(tagDir(tag), 'sweep', cell.id);
     log(`sweep cell ${cell.id} (threshold ${cell.threshold}, bear ${cell.bearWeight})`);
-    const { failed } = await runPhaseB(episodes, {
+    const { failures } = await runPhaseB(episodes, {
       baseDir,
       cfg: cellConfig(cfg, cell),
       haltPolicy: 'auto-resume',
@@ -623,32 +871,69 @@ export async function sweepCommand(
       offline,
       skipExisting: true,
     });
-    if (failed.length > 0) log(`cell ${cell.id}: ${failed.length} failed episodes`);
-    const results = collectEpisodeResults(baseDir);
-    const placed = results.reduce((s, r) => s + r.ordersPlaced, 0);
-    const filled = results.reduce((s, r) => s + r.ordersFilled, 0);
-    rows.push({
-      cell: cell.id,
-      threshold: cell.threshold,
-      bearWeight: cell.bearWeight,
-      episodes: results.length,
-      abstained: results.filter((r) => r.abstained).length,
-      ordersPlaced: placed,
-      ordersFilled: filled,
-      fillRate: placed > 0 ? filled / placed : null,
-      trades: results.reduce((s, r) => s + r.trades.length, 0),
-      netPnlTotalUsd: results.reduce((s, r) => s + episodeNetUsd(r), 0),
-      judgeMissBudget: judgeMissesByCell.get(cell.id) ?? 0,
-    });
+    if (failures.length > 0) {
+      log(`cell ${cell.id}: ${failures.length} failed episodes`);
+      for (const f of failures) log(`  ${f.day} exit ${f.exitCode}: ${f.reason}`);
+    }
   }
-  writeJsonFile(path.join(tagDir(tag), 'sweep-results.json'), rows);
-  console.log('\ncell      thr   bear  eps  abst  placed  filled  fillRate  trades  netPnl');
-  for (const r of rows) {
-    console.log(
-      `${r.cell.padEnd(8)}  ${r.threshold.toFixed(2)}  ${r.bearWeight.toFixed(1)}   ${String(r.episodes).padStart(3)}  ${String(r.abstained).padStart(4)}  ${String(r.ordersPlaced).padStart(6)}  ${String(r.ordersFilled).padStart(6)}  ${r.fillRate === null ? '     n/a' : (100 * r.fillRate).toFixed(1).padStart(7) + '%'}  ${String(r.trades).padStart(6)}  ${r.netPnlTotalUsd.toFixed(2).padStart(8)}`,
-    );
-  }
+  const file = aggregateSweep(tag, cells, mode, judgeMissesByCell);
+  printSweepTable(file.cells);
+  if (mode === 'signals') writeSignalAttribution(tag);
   log('sweep done');
+}
+
+/**
+ * Regenerate sweep-results.json (and, for signal sweeps, signal-attribution.json)
+ * from the episode-result.json files already on disk — no episodes are run.
+ * Cell threshold/bear come from each cell's persisted episode-args.json; the
+ * judge-miss budget comes from the persisted sweep-budget budget.json files.
+ */
+export function sweepAggregateCommand(tag: string): void {
+  const sweepRoot = path.join(tagDir(tag), 'sweep');
+  let ids: string[] = [];
+  try {
+    ids = fs
+      .readdirSync(sweepRoot)
+      .filter((d) => fs.statSync(path.join(sweepRoot, d)).isDirectory())
+      .sort((a, b) => (a === 'baseline' ? -1 : b === 'baseline' ? 1 : a < b ? -1 : 1));
+  } catch {
+    throw new Error(`no sweep cells under ${sweepRoot} — run: backtest.ts sweep --tag ${tag}`);
+  }
+  if (ids.length === 0) throw new Error(`no sweep cells under ${sweepRoot}`);
+  const cells = ids.map((id) => {
+    const cellDir = path.join(sweepRoot, id);
+    let threshold = NaN;
+    let bearWeight = NaN;
+    for (const day of fs.readdirSync(cellDir).sort()) {
+      const args = readJson<{ cfg?: { conviction_threshold?: number; agent_weights?: { bear?: number } } }>(
+        path.join(cellDir, day, 'episode-args.json'),
+      );
+      if (args?.cfg?.conviction_threshold !== undefined) {
+        threshold = args.cfg.conviction_threshold;
+        bearWeight = args.cfg.agent_weights?.bear ?? NaN;
+        break;
+      }
+    }
+    return { id, threshold, bearWeight };
+  });
+  const judgeMissesByCell = new Map<string, number>();
+  for (const cell of cells) {
+    const budgetDir = path.join(tagDir(tag), 'sweep-budget', cell.id);
+    let judge = 0;
+    try {
+      for (const day of fs.readdirSync(budgetDir)) {
+        judge += readJson<{ judgeMisses: number }>(path.join(budgetDir, day, 'budget.json'))?.judgeMisses ?? 0;
+      }
+    } catch {
+      // no budget pass persisted for this cell
+    }
+    judgeMissesByCell.set(cell.id, judge);
+  }
+  const mode: 'threshold' | 'signals' = ids.some((id) => id.startsWith('sig-')) ? 'signals' : 'threshold';
+  const file = aggregateSweep(tag, cells, mode, judgeMissesByCell);
+  printSweepTable(file.cells);
+  if (mode === 'signals') writeSignalAttribution(tag);
+  log(`sweep-aggregate done: ${path.join(tagDir(tag), 'sweep-results.json')}`);
 }
 
 // ---------- report ----------
@@ -661,9 +946,9 @@ export function writeReport(tag: string, opts: { tbillAnnualRate?: number } = {}
   const summary = readJson<{ completed: string[]; failed: string[]; haltPolicy: string }>(
     path.join(dir, 'run-summary.json'),
   );
-  const sweep = readJson<
-    { cell: string; threshold: number; bearWeight: number; episodes: number; abstained: number; ordersPlaced: number; ordersFilled: number; fillRate: number | null; trades: number; netPnlTotalUsd: number }[]
-  >(path.join(dir, 'sweep-results.json'));
+  const sweepRaw = readJson<SweepRow[] | SweepResultsFile>(path.join(dir, 'sweep-results.json'));
+  const sweep = sweepRaw === null ? null : Array.isArray(sweepRaw) ? sweepRaw : sweepRaw.cells;
+  const sweepShared = sweepRaw !== null && !Array.isArray(sweepRaw) ? sweepRaw.sharedDays.length : null;
 
   const nR = episodes.filter((e) => e.stratum === 'R').length;
   const nH = episodes.filter((e) => e.stratum === 'H').length;
@@ -691,6 +976,9 @@ export function writeReport(tag: string, opts: { tbillAnnualRate?: number } = {}
               `| ${r.cell} | ${r.threshold} | ${r.bearWeight} | ${r.episodes} | ${r.abstained} | ${r.ordersPlaced} | ${r.ordersFilled} | ${r.fillRate === null ? 'n/a' : (100 * r.fillRate).toFixed(1) + '%'} | ${r.trades} | $${r.netPnlTotalUsd.toFixed(2)} |`,
           ),
           '',
+          ...(sweepShared !== null
+            ? [`_Totals restricted to the ${sweepShared} episode days completed by every cell._`, '']
+            : []),
           '_Descriptive only (no walk-forward at this n): abstention/fill-rate vs threshold on shared cached verdicts._',
         ].join('\n')
       : undefined,
@@ -713,30 +1001,26 @@ function loadPrices(): PriceTable | undefined {
   return prices;
 }
 
-/** Print per-signal marginal attribution from a `sweep --signals` run. */
+/**
+ * Print per-signal marginal attribution from a `sweep --signals` run, and
+ * persist it as signal-attribution.json (durable artifact, not console-only).
+ */
 export function attributionsCommand(tag: string): void {
-  const sweepRoot = path.join(tagDir(tag), 'sweep');
-  const baseline = collectEpisodeResults(path.join(sweepRoot, 'baseline'));
-  if (baseline.length === 0) {
-    throw new Error(`no baseline episodes under ${sweepRoot}/baseline — run: backtest.ts sweep --tag ${tag} --signals`);
+  const file = writeSignalAttribution(tag);
+  if (!file) {
+    throw new Error(
+      `no baseline episodes under ${path.join(tagDir(tag), 'sweep', 'baseline')} — run: backtest.ts sweep --tag ${tag} --signals`,
+    );
   }
-  const cellIds = fs.readdirSync(sweepRoot).filter((d) => d.startsWith('sig-')).sort();
-  console.log(`\nSignal attribution — tag ${tag} (paired vs baseline over ${baseline.length} episodes; KILL if CI straddles 0)`);
-  console.log('| signal | pairs | mean marginal $/ep | 95% CI | verdict |');
-  console.log('|---|---|---|---|---|');
-  for (const cellId of cellIds) {
-    const flag = cellId.replace(/^sig-/, '');
-    const a = signalAttribution(flag, baseline, collectEpisodeResults(path.join(sweepRoot, cellId)));
-    const ci = a.bootstrap ? `[$${a.bootstrap.low.toFixed(2)}, $${a.bootstrap.high.toFixed(2)}]` : 'n/a';
-    const verdict = !a.bootstrap
-      ? 'no data'
-      : a.bootstrap.low > 0
-        ? 'favorable → soak candidate'
-        : a.bootstrap.high < 0
-          ? 'unfavorable → KILL'
-          : 'CI straddles 0 → KILL';
-    console.log(`| ${flag} | ${a.nPairs} | $${a.meanMarginalUsd.toFixed(2)} | ${ci} | ${verdict} |`);
+  console.log(`\nSignal attribution — tag ${tag} (paired vs baseline over ${file.baselineEpisodes} episodes; KILL if CI straddles 0)`);
+  console.log('| signal | pairs | dropped | mean marginal $/ep | 95% CI | verdict |');
+  console.log('|---|---|---|---|---|---|');
+  for (const s of file.signals) {
+    const ci = s.bootstrap ? `[$${s.bootstrap.low.toFixed(2)}, $${s.bootstrap.high.toFixed(2)}]` : 'n/a';
+    const dropped = s.droppedDays.baselineOnly.length + s.droppedDays.signalOnly.length;
+    console.log(`| ${s.flag} | ${s.nPairs} | ${dropped} | $${s.meanMarginalUsd.toFixed(2)} | ${ci} | ${s.verdict} |`);
   }
+  log(`wrote ${path.join(tagDir(tag), 'signal-attribution.json')}`);
 }
 
 /** Print sequential K-fold walk-forward headline economics for a tagged run. */
@@ -800,6 +1084,12 @@ async function main(): Promise<void> {
     );
     return;
   }
+  if (cmd === 'sweep-aggregate') {
+    const tag = flagValue('tag');
+    if (!tag) throw new Error('usage: backtest.ts sweep-aggregate --tag T');
+    sweepAggregateCommand(tag);
+    return;
+  }
   if (cmd === 'report') {
     const tag = flagValue('tag');
     if (!tag) throw new Error('usage: backtest.ts report --tag T [--tbill 0.043]');
@@ -819,7 +1109,7 @@ async function main(): Promise<void> {
     walkForwardCommand(tag, numFlag('k') ?? 3, numFlag('tbill'));
     return;
   }
-  console.error('usage: tsx scripts/backtest.ts <sample|precompute|run|sweep|report|attributions|walkforward> [flags]');
+  console.error('usage: tsx scripts/backtest.ts <sample|precompute|run|sweep|sweep-aggregate|report|attributions|walkforward> [flags]');
   process.exit(1);
 }
 
