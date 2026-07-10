@@ -134,3 +134,35 @@ trials:
       REGISTERED POST-HOC (runs 2026-07-09). Headline replays of the shipped
       config under feed/guard variants: tags v2-sip, v3-sip, v3b-sip,
       v3c-guard. Each is a distinct evaluated cell on the same window.
+  - id: earnings-underreaction-smallcap
+    date: "2026-07-10"
+    flag: signals.event_reaction
+    type: alpha
+    status: pre-registered
+    horizonDays: 180
+    targetActiveN: 50
+    mechanism:
+      counterparty: >-
+        Holders of thin small-cap names who sell into the first hours after a
+        positive earnings surprise: retail profit-takers anchored to the
+        pre-announcement price, plus index and ETF flows that trade on
+        schedule rather than on the news content.
+      whyTheyPay: >-
+        Anchoring makes them treat the old price as fair value and exit too
+        early, so the new information is absorbed over days instead of
+        minutes — the documented post-earnings-announcement drift, strongest
+        where analyst coverage is thin.
+      friction: >-
+        The names are too small for institutional capacity: a desk that must
+        deploy millions moves the price against itself before the edge pays,
+        and thin sell-side coverage means nobody is paid to close the gap
+        quickly.
+    notes: >-
+      Registered at DESIGN STAGE (2026-07-10): the signals.event_reaction
+      machinery does not exist yet and nothing has been evaluated — this row
+      states the hypothesis and its mechanism before any code or search.
+      Predicted locus (pre-registered subgroup): small, thinly covered names;
+      an effect concentrated in large caps falsifies the friction sentence
+      even at positive P&L. Set enabledDate when the implementation lands
+      (before any result is read); any backtest search against this flag
+      requires bumping cells here or appending a campaign row first.
