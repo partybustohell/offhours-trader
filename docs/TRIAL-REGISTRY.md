@@ -1,27 +1,56 @@
 # Trial registry
 
 Append-only log of every strategy variant evaluated against the backtest, so
-multiple-testing is explicit. The **honest count of rows here is the `nTrials`**
-fed to `deflatedSharpe` — every threshold sweep, weight change, signal toggle,
-or gate re-calibration inflates the best observed Sharpe by selection and must
-be logged before its result is quoted.
+multiple-testing is explicit. The machine-readable source of truth is
+`trial-registry.yaml`; this file is the narrative log. The **`nTrials`** fed to
+`deflatedSharpe` is the **sum of the `cells` field over `type: alpha` rows**
+(a row without `cells` counts as 1) — every threshold sweep, weight change,
+signal toggle, or gate re-calibration inflates the best observed Sharpe by
+selection and must be logged before its result is read.
+
+Field semantics (yaml):
+
+- `date` — **registration date**: when the row was written. Not the run date,
+  not the data window.
+- `window` — the data window evaluated, e.g. `2026-01-01..2026-07-01`.
+- `cells` — evaluated config cells the row covers. Counting granularity is
+  **per cell, recorded as campaign rows**: one row per sweep/campaign, with
+  `cells` = the number of priced config evaluations it covers. Every priced
+  evaluation counts, including re-runs of the same cell under changed
+  harness/gate settings and runs later judged invalid — over-counting only
+  raises the DSR benchmark (conservative); under-counting is the failure mode.
+  Budget-only/count-only passes price nothing and do not count.
+- `flags` — additional flags a campaign row covers. This registers **backtest
+  search only**. Enabling a signal **live** requires a dedicated row whose
+  `flag` is that signal's config path — the preflight gate matches `flag`
+  exactly and ignores `flags` lists.
 
 Rules:
 
 - Log a row **before** reading the result, not after. Post-hoc registration
-  defeats the purpose.
+  defeats the purpose; where it happens anyway (to keep the count honest),
+  mark the row `REGISTERED POST-HOC`.
 - A "trial" is any change that could change the economic outcome: conviction
   threshold, agent weights, quorum/min_agreeing, any `signals.*` toggle, gate
-  thresholds (spread, cost, blackout windows), sizing mode, regime params.
+  thresholds (spread, cost, blackout windows), sizing mode, regime params,
+  quote feed.
 - Pure guardrails that cannot change the *direction* of a trade (min-position
   floor, max-open-names, timing blackout, exposure caps) still change results
   and so are logged, but flag them `guardrail` — they are not alpha searches.
 - No economic PASS/FAIL verdict is emitted below
   `min_trades_for_economic_claim` (config, default 50); the report enforces
-  this. The deflated Sharpe uses the count of `alpha`-type rows.
+  this. The deflated Sharpe uses the summed cell count of `alpha`-type rows.
+- **Enforcement**: `pnpm preflight` blocks an enabled live alpha flag with no
+  exact-`flag` alpha row; `backtest.ts sweep` refuses to run a search whose
+  flags have no alpha coverage (`flag` or `flags`). The sweep gate checks
+  existence only — a new campaign over already-registered flags still
+  requires appending a row (or bumping `cells`) before results are read.
 
-| # | date | tag | change | type (alpha/guardrail) | result (registered before reading?) | notes |
-|---|------|-----|--------|------------------------|--------------------------------------|-------|
-| 1 | 2026-01 | rev2-sweep | conviction_threshold sweep → 0.55 shipped | alpha | yes | Jan–Jun 2026 window; no positive edge established at any threshold (see config.yaml note) |
-| 2 | 2026-07-09 | quant-p0 | P0 guardrails: deploy_priority, min-position floor, max-open-names, timing blackout, gross/net caps | guardrail | n/a (not an alpha search) | safe-by-construction; enabled by default |
-| 3 | 2026-07-09 | quant-p1-p3 | P1–P3 machinery built flag-OFF: anti_chase, amihud, dispersion, trend_gate, gap, low_vol, regime (trend/vol/gross), portfolio (target_vol/inverse_vol/cov), cost_scalar, participation, entry_aggressiveness, gates_by_session, drawdown_throttle, risk_off, calibration | alpha (deferred) | not evaluated — all disabled | NO backtest search run yet. Each is a pre-registered rule shipping inert. Enabling ANY = a new alpha trial that MUST be logged here first, and no economic claim below min_trades_for_economic_claim (≥50 OOS trades). Enable one-at-a-time; recalibrate conviction_threshold after any score-affecting change. |
+| # | date (registered) | window | tag | change | type | cells | result (registered before reading?) | notes |
+|---|------|--------|-----|--------|------|-------|--------------------------------------|-------|
+| 1 | 2026-07-09 | 2026-01-01..2026-07-01 | rev2-sweep | conviction_threshold × bear-weight search → 0.55 shipped | alpha | 33 | yes | 18-cell rev1 grid (6 thr × 3 bear) + 15-cell rev2 5×3 replay; no positive edge at any threshold. Date was previously logged as "2026-01" — that was the window start, not the registration date; corrected 2026-07-10. |
+| 2 | 2026-07-09 | — | quant-p0 | P0 guardrails: deploy_priority, min-position floor, max-open-names, timing blackout, gross/net caps | guardrail | — | n/a (not an alpha search) | safe-by-construction; enabled by default |
+| 3 | 2026-07-09 | — | quant-p1-p3 | P1–P3 machinery built flag-OFF: anti_chase, amihud, dispersion, trend_gate, gap, low_vol, regime (trend/vol/gross), portfolio (target_vol/inverse_vol/cov), cost_scalar, participation, entry_aggressiveness, gates_by_session, drawdown_throttle, risk_off, calibration | guardrail | — | n/a (machinery, not a search) | Signals inert in the LIVE config. Backtest signal-toggle sweeps HAVE since run against these flags (rows 4–5) — the original "no backtest search run yet" note was falsified 2026-07-09. Enabling any signal live = a new alpha row for its specific flag first; no economic claim below min_trades_for_economic_claim (≥50 OOS trades); enable one-at-a-time; recalibrate conviction_threshold after any score-affecting change. |
+| 4 | 2026-07-10 | 2026-01-01..2026-07-01 | sig1–sig6 | signal-toggle sweeps: baseline + one-signal-on cells (13 flags), thr 0.55 / bear 1.2 | alpha | 59 | **no — registered post-hoc** (runs 2026-07-09) | Broken-harness runs (IEX quote-blind until d1b5196, entry blackout on, aborted episodes). Priced cells: sig1 14, sig2 3, sig3 14, sig4 14, sig5 14, sig6 0 (budget pass only). Results are NOT valid evidence for any signal, but the cells were evaluated and count as trials. |
+| 5 | 2026-07-10 | 2026-01-01..2026-07-01 | sig7 | signal-toggle sweep on SIP, no-blackout: baseline + 13 one-signal cells | alpha | 14 | **no — registered post-hoc** (run 2026-07-09) | Baseline completed 41 episodes vs 50 in signal cells — sweep-results.json compares unpaired totals, and failures censor exactly the would-trade days, so per-signal differences are a missing-episode artifact. No keep/kill verdict until re-run with paired episode sets. |
+| 6 | 2026-07-10 | 2026-01-01..2026-07-01 | v2-sip, v3-sip, v3b-sip, v3c-guard | headline replays of the shipped config under feed/guard variants | alpha | 4 | **no — registered post-hoc** (runs 2026-07-09) | Each a distinct evaluated cell on the same window. |
