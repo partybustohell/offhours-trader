@@ -21,10 +21,13 @@ agent_weights:
 # blackout shipped: ~7 trades per 50 sampled days in THAT regime, not this
 # config. Production parity (parity-rth-iex run, 2026-07-10; RTH-only, IEX,
 # shipped gates): theses form on 14/50 days but 0 entries place — the evening
-# thesis is kind=offhours and RTH ticks only consume a kind=rth thesis; the
-# backtest does not simulate the 09:00 `pipeline rth` path, so the deployed
-# entry path has NO backtest-derived trade-rate expectation. No positive edge
-# is established at any threshold — paper soak is the test.
+# thesis is kind=offhours and RTH ticks only consume a kind=rth thesis. The
+# 09:00 `pipeline rth` path is now simulated behind `backtest.ts run
+# --rth-thesis` (tag parity-rth-iex-rthsim, 2026-07-10): 7 closed trades per
+# 50 sampled days (~0.7/week) on the deployed path — but the simulated morning
+# thesis reuses the D 17:00 verdicts (no overnight news / morning scans), see
+# REPORT.md R3.4. Behavioral expectation only: no positive edge is established
+# at any threshold — paper soak is the test.
 conviction_threshold: 0.55
 quorum: 3
 min_agreeing: 2

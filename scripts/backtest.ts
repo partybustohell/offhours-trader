@@ -9,12 +9,17 @@
 //                              via the exact-caching client wrapping a real
 //                              Anthropic client -> backtest-out/prep/<day>.json
 //   run --tag T [--halt-policy auto-resume|stay-halted] [--concurrency 4]
-//       [--prices file] [--offline]
+//       [--prices file] [--offline] [--rth-thesis]
 //                              Phase B: one CHILD PROCESS per episode with
 //                              cwd = backtest-out/T/<day>/ (src/paths.ts
 //                              computes OUT_DIR from process.cwd() at import
 //                              time, so the REAL runTick reads/writes thesis,
-//                              state, and audit files inside the episode dir)
+//                              state, and audit files inside the episode dir).
+//                              --rth-thesis additionally simulates the 09:00
+//                              ET morning pipeline (kind='rth' D+1 thesis from
+//                              the same cached day-D verdicts) so RTH-only
+//                              configs can place entries — see the episode
+//                              runner header for the information-set caveat.
 //   sweep --tag T [--concurrency 4] [--offline]
 //                              18 cells {conviction_threshold x bear weight},
 //                              Phase B only from prep files with the canonical
@@ -346,6 +351,7 @@ interface PhaseBOpts {
   prices?: PriceTable;
   countOnly?: boolean;
   skipExisting?: boolean;
+  rthThesis?: boolean;
 }
 
 export interface EpisodeFailure {
@@ -385,6 +391,7 @@ async function runPhaseB(
       countOnly: opts.countOnly,
       budgetFile: opts.countOnly ? path.join(episodeDir, 'budget.json') : undefined,
       prices: opts.prices,
+      rthThesis: opts.rthThesis,
     };
     const argsFile = path.join(episodeDir, 'episode-args.json');
     writeJsonFile(argsFile, args);
@@ -415,6 +422,7 @@ export async function runCommand(
   offline = false,
   prices?: PriceTable,
   countOnly = false,
+  rthThesis = false,
 ): Promise<void> {
   const sample = loadSample();
   const cfg = loadConfig();
@@ -431,6 +439,7 @@ export async function runCommand(
       concurrency,
       offline,
       countOnly: true,
+      rthThesis,
     });
     let judge = 0;
     let other = 0;
@@ -447,7 +456,10 @@ export async function runCommand(
     );
     return;
   }
-  log(`Phase B '${tag}' (${haltPolicy}): ${episodes.length} episodes, concurrency ${concurrency}`);
+  log(
+    `Phase B '${tag}' (${haltPolicy}${rthThesis ? ', rth-thesis' : ''}): ` +
+      `${episodes.length} episodes, concurrency ${concurrency}`,
+  );
   const { completed, failed, failures } = await runPhaseB(episodes, {
     baseDir: tagDir(tag),
     cfg,
@@ -456,10 +468,12 @@ export async function runCommand(
     offline,
     prices,
     skipExisting: true,
+    rthThesis,
   });
   writeJsonFile(path.join(tagDir(tag), 'run-summary.json'), {
     tag,
     haltPolicy,
+    rthThesis,
     completed: completed.sort(),
     failed: failed.sort(),
     // per-day exit code + last stderr line; full tails in <day>/episode-failure.json
@@ -1065,6 +1079,7 @@ async function main(): Promise<void> {
       hasFlag('offline'),
       loadPrices(),
       hasFlag('count-only'),
+      hasFlag('rth-thesis'),
     );
     return;
   }

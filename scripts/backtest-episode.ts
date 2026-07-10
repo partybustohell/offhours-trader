@@ -22,6 +22,26 @@
 //     stops taking new entries exactly as in production while open positions
 //     stay judge-monitored through the force-flatten (the executor's
 //     expiry-ignoring yesterday-file lookup).
+//   - --rth-thesis (args.rthThesis): simulate the SECOND production pipeline
+//     (scripts/install-schedule.sh, 09:00 ET `pnpm pipeline rth`). At sim
+//     D+1 09:00 a kind='rth' thesis for D+1 is assembled through the same
+//     production entry-assembly path from the SAME cached day-D prep verdicts
+//     and written to thesis-<D+1>-rth.json with the REAL rthThesisExpiry
+//     (D+1 16:00 ET), so D+1 RTH ticks — which consume ONLY a kind='rth'
+//     thesis (src/executor-loop.ts) — can place entries. Without this flag an
+//     RTH-only config structurally places 0 orders (the parity-rth-iex
+//     finding, docs/backtest-2026-01-01..07-01-REPORT.md R3.3).
+//     INFORMATION-SET APPROXIMATION (documented in the report): production's
+//     09:00 run re-runs the whole Phase A — fresh morning scans, nominations,
+//     verdicts — and sees overnight news (D 17:00 -> D+1 09:00). Reusing the
+//     D 17:00 verdict set keeps backtest LLM cost at zero but gives the
+//     morning thesis only evening information (possibly different tickers
+//     and convictions than production would pick). Daily-bar features and
+//     regime are as-of-D closes, which IS the latest complete bar set at
+//     D+1 09:00, so those inputs are exact. Fidelity gap: production RTH
+//     entries carry a native broker stop-loss leg; the sim has no resting-stop
+//     engine, so runTick's per-tick deterministic stop check stands in for it
+//     (fires at most one 15-minute tick late).
 //   - force-flatten at D+1 20:00; EpisodeResult (metrics.ts shape) written.
 //
 // The borrow hard gate (plan §4): short entries on non-easy_to_borrow
@@ -38,14 +58,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import Anthropic from '@anthropic-ai/sdk';
-import type { AuditEvent, ProposedOrder, Thesis, ThesisEntry } from '../src/types.js';
+import type { AccountSnapshot, AuditEvent, ProposedOrder, Thesis, ThesisEntry } from '../src/types.js';
 import { ConfigSchema, type Config } from '../src/config.js';
 import { currentSession, sessionEnabled } from '../src/clock.js';
 import { OUT_DIR, thesisPath, writeJsonAtomic } from '../src/paths.js';
 import { clearHalt as clearHaltState, readHaltState } from '../src/state.js';
 import { riskCheck, type RiskContext } from '../src/risk.js';
 import { runTick, seedDeployedTodayUsd } from '../src/executor-loop.js';
-import { computeThesisEntries, thesisExpiry } from '../src/synthesis.js';
+import { computeThesisEntries, rthThesisExpiry, thesisExpiry } from '../src/synthesis.js';
 import { realizedVolAnnualized } from '../src/candidates.js';
 import { computeTickerFeatures, dailyReturns } from '../src/signals.js';
 import { NEUTRAL_REGIME, computeRegime } from '../src/regime.js';
@@ -121,6 +141,13 @@ export interface EpisodeArgs {
   budgetFile?: string;
   /** Optional price table for llmCostUsd; omitted -> cost reported as 0. */
   prices?: PriceTable;
+  /**
+   * Simulate the 09:00 ET morning pipeline (`pnpm pipeline rth`): at sim
+   * D+1 09:00 write a kind='rth' D+1 thesis assembled from the same cached
+   * day-D prep verdicts (information-set approximation — see the header
+   * comment). Off by default; off-hours-thesis runs are unchanged without it.
+   */
+  rthThesis?: boolean;
 }
 
 export interface EpisodeOverrides {
@@ -439,44 +466,60 @@ export async function runEpisode(
   // Market regime as-of D from SPY closes (neutral if SPY bars aren't cached).
   const spyCloses = asOfBars('SPY').map((b) => b.c);
   const regime = spyCloses.length > 1 ? computeRegime(spyCloses, cfg.regime) : NEUTRAL_REGIME;
-  const account = await ledger.getAccount();
-  const computed = computeThesisEntries(
-    prep.verdicts.verdicts,
-    marketInfo,
-    account,
-    cfg,
-    regime,
-    returnsByTicker,
-  );
-  const abstained = computed.entries.length === 0;
-  const narratives = await writeNarratives(cfg, computed.entries, prep.verdicts.verdicts, llm);
-  // pipeline.ts entry assembly: narrative + invalidationConditions override
-  // with fallback to the computed conditions.
-  const merged: ThesisEntry[] = computed.entries.map((entry) => {
-    const n = narratives.get(entry.ticker);
-    return {
-      ...entry,
-      narrative: n?.narrative ?? '',
-      invalidationConditions: n?.invalidationConditions ?? entry.invalidationConditions,
-    };
-  });
-  // Borrow hard gate (plan §4): reject short entries on non-ETB symbols here,
-  // reported like risk-gate rejections; they never reach the thesis file.
+  // Production entry assembly (pipeline.ts): computeThesisEntries at the
+  // account of assembly time -> writeNarratives -> narrative merge -> borrow
+  // hard gate. Shared by the evening off-hours thesis and (under --rth-thesis)
+  // the simulated 09:00 morning thesis — production runs this same path twice
+  // a day. Borrow-gate rejections are counted per assembly, so a non-ETB short
+  // rejected by both theses counts twice (as production would reject it twice).
   const preRejections: Record<string, number> = {};
-  const entries = merged.filter((entry) => {
-    if (entry.direction === 'short' && !ledger.checkShortable(entry.ticker)) {
-      preRejections['not shortable'] = (preRejections['not shortable'] ?? 0) + 1;
-      return false;
-    }
-    return true;
-  });
+  const assembleEntries = async (
+    account: AccountSnapshot,
+  ): Promise<{
+    entries: ThesisEntry[];
+    skipped: { ticker: string; reason: string }[];
+    computedCount: number;
+  }> => {
+    const computed = computeThesisEntries(
+      prep.verdicts.verdicts,
+      marketInfo,
+      account,
+      cfg,
+      regime,
+      returnsByTicker,
+    );
+    const narratives = await writeNarratives(cfg, computed.entries, prep.verdicts.verdicts, llm);
+    // pipeline.ts entry assembly: narrative + invalidationConditions override
+    // with fallback to the computed conditions.
+    const merged: ThesisEntry[] = computed.entries.map((entry) => {
+      const n = narratives.get(entry.ticker);
+      return {
+        ...entry,
+        narrative: n?.narrative ?? '',
+        invalidationConditions: n?.invalidationConditions ?? entry.invalidationConditions,
+      };
+    });
+    // Borrow hard gate (plan §4): reject short entries on non-ETB symbols here,
+    // reported like risk-gate rejections; they never reach the thesis file.
+    const entries = merged.filter((entry) => {
+      if (entry.direction === 'short' && !ledger.checkShortable(entry.ticker)) {
+        preRejections['not shortable'] = (preRejections['not shortable'] ?? 0) + 1;
+        return false;
+      }
+      return true;
+    });
+    return { entries, skipped: computed.skipped, computedCount: computed.entries.length };
+  };
+
+  const assembled = await assembleEntries(await ledger.getAccount());
+  const abstained = assembled.computedCount === 0;
   const thesis: Thesis = {
     date: day,
     kind: 'offhours',
     generatedAt: new Date(startMs).toISOString(),
     expiresAt: flattenIso,
-    entries,
-    skipped: computed.skipped,
+    entries: assembled.entries,
+    skipped: assembled.skipped,
   };
   writeJsonAtomic(thesisPath(day), thesis);
 
@@ -560,6 +603,13 @@ export async function runEpisode(
   let halts = 0;
   let prevHalted = readHaltState().halted;
   let syntheticWritten = false;
+  // --rth-thesis: the production 09:00 ET morning pipeline writes the D+1
+  // kind='rth' thesis the RTH executor consumes (see the header comment for
+  // the information-set approximation this simulation makes).
+  const rthGenMs = Date.parse(`${d1}T09:00:00${etOffsetForDate(d1)}`);
+  let rthThesisWritten = args.rthThesis !== true; // true = nothing left to write
+  // Quote/trade feed covers both theses' tickers plus positions/open orders.
+  const feedTickers = new Set(thesis.entries.map((e) => e.ticker.toUpperCase()));
 
   for (let t = startMs; t < flattenMs; t += TICK_MS) {
     const nowIso = new Date(t).toISOString();
@@ -583,6 +633,26 @@ export async function runEpisode(
     // during RTH); runTick below is gated to enabled sessions only.
     await advanceFills();
 
+    // Simulated morning pipeline: assemble the D+1 kind='rth' thesis at the
+    // first tick at/after 09:00 ET, from the SAME cached day-D verdicts, at
+    // the CURRENT account (fills through 09:00 included, as production's
+    // broker.getAccount() would see them). Runs before the session gate —
+    // 09:00 is premarket, which may be disabled (the parity config).
+    if (!rthThesisWritten && t >= rthGenMs) {
+      const morning = await assembleEntries(await ledger.getAccount());
+      const rth: Thesis = {
+        date: d1,
+        kind: 'rth',
+        generatedAt: new Date(rthGenMs).toISOString(),
+        expiresAt: rthThesisExpiry(d1),
+        entries: morning.entries,
+        skipped: morning.skipped,
+      };
+      writeJsonAtomic(thesisPath(d1, 'rth'), rth);
+      for (const entry of morning.entries) feedTickers.add(entry.ticker.toUpperCase());
+      rthThesisWritten = true;
+    }
+
     const session = currentSession(new Date(t));
     if (!sessionEnabled(session, cfg)) continue;
 
@@ -604,7 +674,7 @@ export async function runEpisode(
     const acct = await ledger.getAccount();
     const open = await ledger.getOpenOrders();
     const tickers = new Set<string>([
-      ...thesis.entries.map((e) => e.ticker.toUpperCase()),
+      ...feedTickers,
       ...acct.positions.map((p) => p.ticker.toUpperCase()),
       ...open.map((o) => o.ticker.toUpperCase()),
     ]);

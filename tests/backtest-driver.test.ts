@@ -335,10 +335,37 @@ for (const symbol of ['ENTA', 'ENTB']) {
   ]);
 }
 
+// Episode 4 (R): --rth-thesis under the shipped-parity session shape (RTH
+// only). Quotes exist ONLY at D+1 RTH ticks, so without the flag the episode
+// structurally places 0 orders (offhours thesis, rth ticks — the
+// parity-rth-iex zero) and with it the morning kind='rth' thesis trades.
+const EP4 = { day: '2026-03-19', next: '2026-03-20' }; // Thu -> Fri
+const RTH_CFG = ConfigSchema.parse({
+  max_position_loss_pct: 50,
+  sessions: { premarket: false, afterhours: false, regularhours: true },
+});
+const prep4 = writePrep(EP4.day, 'R', verdictsFor('RTHA', 'long', 0.8), {
+  RTHA: { lastPrice: 50, avgDollarVolume20d: 1e9 },
+});
+for (let m = 9 * 60 + 30; m <= 15 * 60 + 45; m += 15) {
+  const h = String(Math.floor(m / 60)).padStart(2, '0');
+  const mm = String(m % 60).padStart(2, '0');
+  const tick = iso(EP4.next, `${h}:${mm}:00`);
+  writeQuote('RTHA', tick, 49.95, 50.05);
+  writeTrade('RTHA', tick, 50.0);
+}
+writeMinuteBars('RTHA', EP4.next, [
+  { t: iso(EP4.next, '09:46:00'), o: 50, h: 50.2, l: 49.9, c: 50, v: 1000 },
+  { t: iso(EP4.next, '09:47:00'), o: 50, h: 50.2, l: 49.9, c: 50, v: 1000 },
+  { t: iso(EP4.next, '15:59:00'), o: 49.8, h: 50.0, l: 49.7, c: 49.8, v: 1000 },
+]);
+
 const DIR1 = path.join(OUT_ROOT, 'itest', EP1.day);
 const DIR1_REPLAY = path.join(OUT_ROOT, 'itest-replay', EP1.day);
 const DIR2 = path.join(OUT_ROOT, 'itest', EP2.day);
 const DIR3 = path.join(OUT_ROOT, 'itest', EP3.day);
+const DIR4 = path.join(OUT_ROOT, 'itest-rth', EP4.day);
+const DIR4_CTRL = path.join(OUT_ROOT, 'itest-rth-ctrl', EP4.day);
 
 const ep1Stub = (): LlmClient =>
   makeStub({
@@ -561,6 +588,95 @@ describe('episode 3: risk-gate rejection and the borrow hard gate', () => {
     expect(thesis.entries.map((e) => e.ticker)).toEqual(['ENTA', 'ENTB', 'ENTC']);
     expect(thesis.entries[0]!.invalidationConditions).toEqual(['ENTA invalidation']);
     expect(thesis.entries[0]!.narrative).toContain('evidence ENTA');
+  });
+});
+
+describe('episode 4: --rth-thesis simulates the 09:00 morning pipeline (RTH-only sessions)', () => {
+  const ep4Stub = (): LlmClient =>
+    makeStub({
+      narratives: [
+        {
+          ticker: 'RTHA',
+          narrative: 'Long RTHA narrative.',
+          invalidation_conditions: ['RTHA merged condition'],
+        },
+      ],
+    });
+
+  it('without the flag reproduces the parity zero: rth ticks find no kind=rth thesis', async () => {
+    const control = await runInProcess(
+      DIR4_CTRL,
+      episodeArgs(EP4.day, 'R', prep4, DIR4_CTRL, RTH_CFG),
+      ep4Stub(),
+    );
+    expect(control.abstained).toBe(false); // the offhours thesis DID form
+    expect(control.ordersPlaced).toBe(0);
+    expect(control.trades).toEqual([]);
+    expect(fs.existsSync(path.join(DIR4_CTRL, 'out', `thesis-${EP4.next}-rth.json`))).toBe(false);
+    const events = readAudit(DIR4_CTRL);
+    expect(
+      events.some(
+        (e) => e.kind === 'tick' && e.data.stage === 'no_thesis' && e.data.thesisKind === 'rth',
+      ),
+    ).toBe(true);
+  });
+
+  it('with the flag writes the D+1 kind=rth thesis and places the RTH entry', async () => {
+    const args = { ...episodeArgs(EP4.day, 'R', prep4, DIR4, RTH_CFG), rthThesis: true };
+    const result = await runInProcess(DIR4, args, ep4Stub());
+
+    // Real thesisPath(d1,'rth') + rthThesisExpiry: generated 09:00, expires 16:00.
+    const rth = JSON.parse(
+      fs.readFileSync(path.join(DIR4, 'out', `thesis-${EP4.next}-rth.json`), 'utf8'),
+    ) as {
+      kind: string;
+      date: string;
+      generatedAt: string;
+      expiresAt: string;
+      entries: { ticker: string; narrative: string }[];
+    };
+    expect(rth.kind).toBe('rth');
+    expect(rth.date).toBe(EP4.next);
+    expect(rth.generatedAt).toBe(iso(EP4.next, '09:00:00'));
+    expect(rth.expiresAt).toBe(iso(EP4.next, '16:00:00'));
+    expect(rth.entries.map((e) => e.ticker)).toEqual(['RTHA']);
+    expect(rth.entries[0]!.narrative).toBe('Long RTHA narrative.');
+
+    // Entry places at the first non-blackout RTH tick (09:45; 09:30 is inside
+    // rth_open_min 10), fills off the 09:46 bar, force-flattens at D+1 20:00.
+    expect(result.abstained).toBe(false);
+    expect(result.ordersPlaced).toBe(1);
+    expect(result.ordersFilled).toBe(1);
+    expect(result.danglingAtFlatten).toBe(1);
+    expect(result.trades).toHaveLength(1);
+    const trade = result.trades[0]!;
+    expect(trade.ticker).toBe('RTHA');
+    expect(trade.side).toBe('long');
+    expect(trade.entryPrice).toBe(50.05);
+    expect(trade.exitPrice).toBe(49.8); // last minute-bar close before 20:00
+    expect(trade.exitReason).toBe('force-flatten');
+
+    const events = readAudit(DIR4);
+    expect(
+      events.some((e) => e.kind === 'proposed_order' && e.data.intent === 'entry'),
+    ).toBe(true);
+    expect(
+      events.some(
+        (e) =>
+          e.kind === 'order_placed' &&
+          String((e.data as { clientOrderId?: string }).clientOrderId).startsWith('entry-'),
+      ),
+    ).toBe(true);
+    // The RTH tick consumed the D+1 rth thesis, not day D's offhours thesis.
+    expect(
+      events.some(
+        (e) =>
+          e.kind === 'tick' &&
+          e.data.stage === 'tick_summary' &&
+          e.data.session === 'rth' &&
+          e.data.thesisDate === EP4.next,
+      ),
+    ).toBe(true);
   });
 });
 
