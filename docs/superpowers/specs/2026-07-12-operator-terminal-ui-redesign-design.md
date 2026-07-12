@@ -1,7 +1,7 @@
 # Off-Hours Trader — Operator Terminal UI Redesign
 
 Date: 2026-07-12  
-Status: Approved direction; pending written-spec review
+Status: Approved for implementation
 
 ## Objective
 
