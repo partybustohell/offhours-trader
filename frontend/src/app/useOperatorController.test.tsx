@@ -38,7 +38,37 @@ describe('useOperatorController', () => {
     expect(poll).toHaveBeenCalledTimes(2);
   });
 
-  it('retains an action failure and does not imply an order was submitted', async () => {
+  it('runs a trailing refresh after an active poll settles for a successful mutation', async () => {
+    let releaseInitial: ((value: PollResults) => void) | undefined;
+    const poll = vi.fn()
+      .mockImplementationOnce(() => new Promise<PollResults>((resolve) => {
+        releaseInitial = resolve;
+      }))
+      .mockResolvedValueOnce(rejectedPoll('post-mutation refresh'));
+    const api: OperatorApi = {
+      poll,
+      action: vi.fn().mockResolvedValue({ ok: true, data: {}, message: 'Execution complete.' }),
+    };
+    const { result } = renderHook(() => useOperatorController(api));
+    let actionPromise: Promise<void> | undefined;
+
+    await act(async () => {
+      actionPromise = result.current.runAction('executionCheck');
+      await Promise.resolve();
+    });
+
+    expect(result.current.actions.executionCheck.phase).toBe('success');
+    expect(poll).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      releaseInitial?.(rejectedPoll());
+      await actionPromise;
+    });
+
+    expect(poll).toHaveBeenCalledTimes(2);
+  });
+
+  it('uses conservative copy when an execution outcome cannot be confirmed', async () => {
     const api: OperatorApi = {
       poll: vi.fn().mockResolvedValue(rejectedPoll()),
       action: vi.fn().mockResolvedValue({ ok: false, error: 'Broker did not respond.' }),
@@ -49,7 +79,8 @@ describe('useOperatorController', () => {
 
     expect(result.current.actions.executionCheck).toMatchObject({
       phase: 'error',
-      message: 'Execution check failed. Broker did not respond. No order was submitted.',
+      message: 'Execution check failed. Broker did not respond. '
+        + 'Order submission could not be confirmed. Check broker activity before retrying.',
     });
   });
 

@@ -91,7 +91,9 @@ const successMessages: Record<OperatorAction, string> = {
 function actionError(action: OperatorAction, error: string): string {
   const trimmed = error.trim();
   const cause = /[.!?]$/.test(trimmed) ? trimmed : trimmed + '.';
-  const suffix = action === 'executionCheck' ? ' No order was submitted.' : '';
+  const suffix = action === 'executionCheck'
+    ? ' Order submission could not be confirmed. Check broker activity before retrying.'
+    : '';
   return labels[action] + ' failed. ' + cause + suffix;
 }
 
@@ -100,19 +102,23 @@ export function useOperatorController(
   intervalMs = 10_000,
 ): OperatorController {
   const [state, setState] = useState(createInitialOperatorState);
-  const inFlight = useRef(false);
+  const activeRefresh = useRef<Promise<void> | null>(null);
   const mounted = useRef(true);
 
-  const refresh = useCallback(async () => {
-    if (inFlight.current) return;
-    inFlight.current = true;
+  const refresh = useCallback((): Promise<void> => {
+    if (activeRefresh.current) return activeRefresh.current;
     setState((current) => markRefreshing(current, Date.now()));
-    try {
+
+    const request = (async () => {
       const results = await api.poll();
       if (mounted.current) setState((current) => applyPoll(current, results, Date.now()));
-    } finally {
-      inFlight.current = false;
-    }
+    })();
+    let tracked: Promise<void>;
+    tracked = request.finally(() => {
+      if (activeRefresh.current === tracked) activeRefresh.current = null;
+    });
+    activeRefresh.current = tracked;
+    return tracked;
   }, [api]);
 
   useEffect(() => {
@@ -143,7 +149,15 @@ export function useOperatorController(
       message: successMessages[action],
       completedAt: Date.now(),
     }));
-    await refresh();
+    const active = activeRefresh.current;
+    if (active) {
+      try {
+        await active;
+      } catch {
+        // A failed active poll must not consume the mutation's trailing refresh.
+      }
+    }
+    if (mounted.current) await refresh();
   }, [api, refresh]);
 
   return { ...state, refresh, runAction };
