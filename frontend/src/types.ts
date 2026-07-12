@@ -34,6 +34,16 @@ export interface VerdictFile {
   droppedAnalysts: AnalystName[];
 }
 
+export interface SizingAttribution {
+  baseNotional: number;
+  weightedConviction: number;
+  volScalar: number;
+  floor: number;
+  scalars: Record<string, number>;
+  product: number;
+  leaveOneOut: Record<string, number>;
+}
+
 export interface ThesisEntry {
   ticker: string;
   direction: 'long' | 'short';
@@ -42,7 +52,9 @@ export interface ThesisEntry {
   targetNotionalUsd: number;
   narrative: string;
   invalidationConditions: string[];
+  sizing?: SizingAttribution;
 }
+
 export interface Thesis {
   date: string;
   kind: 'offhours' | 'rth';
@@ -50,6 +62,13 @@ export interface Thesis {
   expiresAt: string;
   entries: ThesisEntry[];
   skipped: { ticker: string; reason: string }[];
+  regime?: {
+    state: string;
+    longScalar: number;
+    shortScalar: number;
+    volScalar: number;
+    thresholdBump: number;
+  };
 }
 
 export interface Position {
@@ -71,6 +90,8 @@ export interface BrokerOrder {
   timeInForce?: string;
   status: string;
   submittedAt: string;
+  clientOrderId?: string;
+  filledQty?: number;
 }
 
 export interface HaltState {
@@ -79,22 +100,30 @@ export interface HaltState {
   at: string;
 }
 
-export type AuditKind =
-  | 'nomination'
-  | 'candidates'
-  | 'verdict'
-  | 'thesis'
-  | 'tick'
-  | 'proposed_order'
-  | 'order_placed'
-  | 'order_rejected'
-  | 'exit'
-  | 'halt'
-  | 'resume'
-  | 'error';
+export const KNOWN_AUDIT_KINDS = [
+  'nomination',
+  'candidates',
+  'verdict',
+  'thesis',
+  'tick',
+  'proposed_order',
+  'order_placed',
+  'order_rejected',
+  'exit',
+  'counterfactual',
+  'halt',
+  'resume',
+  'error',
+] as const;
+
+export type KnownAuditKind = (typeof KNOWN_AUDIT_KINDS)[number];
+
+// Retained temporarily for existing views; new code should use KnownAuditKind.
+export type AuditKind = KnownAuditKind;
+
 export interface AuditEvent {
   ts: string;
-  kind: AuditKind;
+  kind: string;
   data: unknown;
 }
 

@@ -1,6 +1,5 @@
 import type {
   AuditEvent,
-  AuditKind,
   BacktestResponse,
   BrokerOrder,
   CandidateFile,
@@ -18,10 +17,10 @@ import type {
 
 const MODES: Mode[] = ['dry-run', 'paper', 'live'];
 const SESSIONS: Session[] = ['premarket', 'rth', 'afterhours', 'closed'];
-const AUDIT_KINDS: AuditKind[] = [
-  'nomination', 'candidates', 'verdict', 'thesis', 'tick', 'proposed_order',
-  'order_placed', 'order_rejected', 'exit', 'halt', 'resume', 'error',
-];
+
+export type ApiResult<T> =
+  | { ok: true; data: T; message?: string }
+  | { ok: false; error: string };
 
 function isObj(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -74,7 +73,7 @@ export async function fetchCandidates(): Promise<CandidateFile | null> {
 }
 
 export async function fetchThesis(kind: 'offhours' | 'rth' = 'offhours'): Promise<Thesis | null> {
-  const raw = await getJson(`/api/thesis?kind=${kind}`);
+  const raw = await getJson('/api/thesis?kind=' + kind);
   if (!isObj(raw) || !Array.isArray(raw.entries)) return null;
   return {
     date: typeof raw.date === 'string' ? raw.date : '',
@@ -82,7 +81,8 @@ export async function fetchThesis(kind: 'offhours' | 'rth' = 'offhours'): Promis
     generatedAt: typeof raw.generatedAt === 'string' ? raw.generatedAt : '',
     expiresAt: typeof raw.expiresAt === 'string' ? raw.expiresAt : '',
     entries: raw.entries as Thesis['entries'],
-    skipped: Array.isArray(raw.skipped) ? (raw.skipped as Thesis['skipped']) : [],
+    skipped: Array.isArray(raw.skipped) ? raw.skipped as Thesis['skipped'] : [],
+    regime: isObj(raw.regime) ? raw.regime as unknown as Thesis['regime'] : undefined,
   };
 }
 
@@ -133,7 +133,7 @@ export function isMissingKeysError(message: string): boolean {
 }
 
 export async function fetchAudit(limit = 100): Promise<AuditEvent[]> {
-  const raw = await getJson(`/api/audit?limit=${limit}`);
+  const raw = await getJson('/api/audit?limit=' + limit);
   const arr = Array.isArray(raw)
     ? raw
     : isObj(raw) && Array.isArray(raw.items)
@@ -141,16 +141,14 @@ export async function fetchAudit(limit = 100): Promise<AuditEvent[]> {
       : isObj(raw) && Array.isArray(raw.events)
         ? raw.events
         : [];
-  const events: AuditEvent[] = [];
-  for (const e of arr) {
-    if (!isObj(e)) continue;
-    events.push({
-      ts: typeof e.ts === 'string' ? e.ts : '',
-      kind: AUDIT_KINDS.includes(e.kind as AuditKind) ? (e.kind as AuditKind) : 'tick',
-      data: e.data,
-    });
-  }
-  return events;
+  return arr.flatMap((event): AuditEvent[] => {
+    if (!isObj(event)) return [];
+    return [{
+      ts: typeof event.ts === 'string' ? event.ts : '',
+      kind: typeof event.kind === 'string' ? event.kind : 'unknown',
+      data: event.data,
+    }];
+  });
 }
 
 export async function fetchConfig(): Promise<Config | null> {
@@ -160,47 +158,45 @@ export async function fetchConfig(): Promise<Config | null> {
   return o as unknown as Config;
 }
 
-export async function putConfig(next: unknown): Promise<{ ok: boolean; error?: string }> {
+export async function putConfig(next: unknown): Promise<ApiResult<Config>> {
   try {
     const res = await fetch('/api/config', {
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(next),
     });
-    let body: unknown = null;
-    try {
-      body = await res.json();
-    } catch {
-      body = null;
-    }
-    const o = isObj(body) ? body : {};
+    const body: unknown = await res.json().catch(() => null);
     if (!res.ok) {
-      return { ok: false, error: typeof o.error === 'string' ? o.error : `HTTP ${res.status}` };
+      const message = isObj(body) && typeof body.error === 'string'
+        ? body.error
+        : 'HTTP ' + res.status;
+      return { ok: false, error: message };
     }
-    return { ok: true };
-  } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    if (!isObj(body) || typeof body.mode !== 'string') {
+      return { ok: false, error: 'The server returned an invalid configuration.' };
+    }
+    return { ok: true, data: body as unknown as Config };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
 }
 
 export async function postAction(
   path: '/api/pipeline/run' | '/api/executor/tick' | '/api/halt' | '/api/resume',
-): Promise<{ ok: boolean; message?: string }> {
+): Promise<ApiResult<unknown>> {
   try {
     const res = await fetch(path, { method: 'POST' });
-    let body: unknown = null;
-    try {
-      body = await res.json();
-    } catch {
-      body = null;
-    }
-    const o = isObj(body) ? body : {};
+    const body: unknown = await res.json().catch(() => null);
     if (!res.ok) {
-      return { ok: false, message: typeof o.error === 'string' ? o.error : `HTTP ${res.status}` };
+      const message = isObj(body) && typeof body.error === 'string'
+        ? body.error
+        : 'HTTP ' + res.status;
+      return { ok: false, error: message };
     }
-    return { ok: true, message: typeof o.message === 'string' ? o.message : undefined };
-  } catch (e) {
-    return { ok: false, message: e instanceof Error ? e.message : String(e) };
+    const message = isObj(body) && typeof body.message === 'string' ? body.message : undefined;
+    return { ok: true, data: body, message };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
 }
 

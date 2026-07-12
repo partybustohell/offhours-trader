@@ -1,5 +1,5 @@
-import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   plugins: [react()],
@@ -10,5 +10,14 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
+  },
+  test: {
+    environment: 'jsdom',
+    environmentOptions: { jsdom: { url: 'http://localhost/' } },
+    setupFiles: ['./src/test/setup.ts'],
+    include: ['src/**/*.test.{ts,tsx}'],
+    clearMocks: true,
+    restoreMocks: true,
+    unstubGlobals: true,
   },
 });

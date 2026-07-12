@@ -11,7 +11,9 @@
     "ensure-stops": "tsx scripts/ensure-stops.ts",
     "ensure-stops:apply": "tsx scripts/ensure-stops.ts --apply",
     "preflight": "tsx scripts/preflight.ts",
-    "test": "vitest run",
+    "test:backend": "vitest run",
+    "test:frontend": "pnpm --dir frontend test",
+    "test": "pnpm test:backend && pnpm test:frontend",
     "typecheck": "tsc --noEmit",
     "build:frontend": "cd frontend && pnpm install && pnpm build"
   },
