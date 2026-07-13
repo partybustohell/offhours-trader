@@ -37,6 +37,7 @@ export interface ActionControlProps {
     confirmLabel: string;
   };
   disabled?: boolean;
+  showResult?: boolean;
   onInvoke(action: OperatorAction): Promise<void>;
 }
 
@@ -47,6 +48,7 @@ export function ActionControl({
   tone = 'routine',
   confirmation,
   disabled = false,
+  showResult = true,
   onInvoke,
 }: ActionControlProps) {
   const [confirming, setConfirming] = useState(false);
@@ -161,12 +163,12 @@ export function ActionControl({
           </div>
         </div>
       ) : null}
-      {state.phase === 'success' && localError === null ? (
+      {showResult && state.phase === 'success' && localError === null ? (
         <div className="action-control__result is-success" role="status" aria-live="polite">
           {state.message}
         </div>
       ) : null}
-      {errorMessage !== null ? (
+      {showResult && errorMessage !== null ? (
         <div className="action-control__result is-error" role="alert" aria-live="assertive">
           {errorMessage}
         </div>

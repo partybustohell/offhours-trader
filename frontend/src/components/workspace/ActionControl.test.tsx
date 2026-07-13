@@ -338,4 +338,24 @@ describe('ActionControl', () => {
 
     expect(screen.getByRole('status')).toHaveTextContent('Analysis started.');
   });
+
+  it('can defer visible results to a persistent shell without changing standalone defaults', () => {
+    render(
+      <ActionControl
+        action="executionCheck"
+        label="Check execution now"
+        state={{
+          phase: 'error',
+          message:
+            'Execution check failed. Broker did not respond. Order submission could not be confirmed. Check broker activity before retrying.',
+          completedAt: 1,
+        }}
+        showResult={false}
+        onInvoke={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Check execution now' })).toBeVisible();
+  });
 });
