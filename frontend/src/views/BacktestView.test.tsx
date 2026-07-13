@@ -187,6 +187,36 @@ describe('BacktestView', () => {
     expect(within(missingRow!).getByText('Not available')).toBeVisible();
   });
 
+  it('distinguishes returned cells without recorded net P&L from no cells', async () => {
+    render(
+      <BacktestView
+        backtest={{
+          ...backtestFixture,
+          cells: [
+            {
+              ...backtestFixture.cells![0],
+              cell: 'net-missing',
+              netPnlUsd: null,
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(
+      screen.getByText('No cells with recorded net P&L were returned.'),
+    ).toBeVisible();
+    expect(
+      screen.queryByText('No threshold cells were returned.'),
+    ).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('tab', { name: 'Sweep' }));
+    const table = screen.getByRole('table', { name: 'Backtest sweep' });
+    const returnedRow = within(table).getByText('net-missing').closest('tr');
+    expect(returnedRow).not.toBeNull();
+    expect(within(returnedRow!).getByText('Not available')).toBeVisible();
+  });
+
   it('uses signed semantic P&L text only for finite nonzero values', async () => {
     render(
       <BacktestView
@@ -246,7 +276,7 @@ describe('BacktestView', () => {
     }
   });
 
-  it('states when returned cells and trades are empty', async () => {
+  it('states when no threshold cells and no trades are returned', async () => {
     render(<BacktestView backtest={{ ...backtestFixture, cells: [], trades: [] }} />);
     expect(screen.getByText('No threshold cells were returned.')).toBeVisible();
 

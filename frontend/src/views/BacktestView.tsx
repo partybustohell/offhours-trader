@@ -58,11 +58,14 @@ function chartPointLabel(point: ReturnType<typeof buildBacktestPoints>[number]) 
 
 function PnlChart({ backtest }: { backtest: BacktestResponse }) {
   const pointListId = useId();
-  const points = buildBacktestPoints(backtest.cells ?? []);
+  const cells = backtest.cells ?? [];
+  const points = buildBacktestPoints(cells);
   if (points.length === 0) {
     return (
       <StatusMessage tone="empty">
-        No threshold cells were returned.
+        {cells.length === 0
+          ? 'No threshold cells were returned.'
+          : 'No cells with recorded net P&L were returned.'}
       </StatusMessage>
     );
   }
