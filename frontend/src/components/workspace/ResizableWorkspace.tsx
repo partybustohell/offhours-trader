@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -29,12 +30,35 @@ export interface ResizableWorkspaceProps {
   bottom?: ReactNode;
   detailOpen?: boolean;
   detailLabel?: string;
+  backLabel?: string;
   onDetailClose?(): void;
 }
 
 const dividerWidth = 1;
 const mobileDetailBreakpoint = 900;
 const wideWorkspaceMin = 1016;
+const focusableSelector = [
+  'button:not(:disabled)',
+  'a[href]',
+  'input:not(:disabled)',
+  'select:not(:disabled)',
+  'textarea:not(:disabled)',
+  '[tabindex]:not([tabindex="-1"])',
+].join(',');
+
+function fallbackFocusTarget(
+  panes: readonly (HTMLElement | null)[],
+): HTMLElement | null {
+  for (const pane of panes) {
+    const selected = pane?.querySelector<HTMLElement>('[aria-selected="true"]');
+    if (selected && selected.matches(focusableSelector)) return selected;
+  }
+  for (const pane of panes) {
+    const focusable = pane?.querySelector<HTMLElement>(focusableSelector);
+    if (focusable) return focusable;
+  }
+  return null;
+}
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -88,6 +112,7 @@ export function ResizableWorkspace({
   bottom,
   detailOpen = false,
   detailLabel = 'Detail',
+  backLabel = 'Back to list',
   onDetailClose = () => undefined,
 }: ResizableWorkspaceProps) {
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
@@ -97,6 +122,12 @@ export function ResizableWorkspace({
     startX: number;
     widths: ColumnWidths;
   } | null>(null);
+  const leftRef = useRef<HTMLDivElement>(null);
+  const centerRef = useRef<HTMLDivElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const backRef = useRef<HTMLButtonElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  const previousDetailOpenRef = useRef(detailOpen);
 
   useEffect(() => {
     const onResize = () => setViewportWidth(window.innerWidth);
@@ -110,6 +141,33 @@ export function ResizableWorkspace({
     () => fitWidths(viewportWidth, desired, constraints),
     [constraints, desired, viewportWidth],
   );
+
+  useLayoutEffect(() => {
+    const wasOpen = previousDetailOpenRef.current;
+    previousDetailOpenRef.current = detailOpen;
+    if (!mobile || wasOpen === detailOpen) return;
+
+    if (detailOpen) {
+      backRef.current?.focus();
+      return;
+    }
+
+    const panes = [centerRef.current, leftRef.current, bottomRef.current] as const;
+    const retained = returnFocusRef.current;
+    const retainedPane = panes.find((pane) => pane?.contains(retained));
+    const target =
+      retained && retained.isConnected && retainedPane
+        ? retained
+        : fallbackFocusTarget(panes);
+    target?.focus();
+    returnFocusRef.current = null;
+  }, [detailOpen, mobile]);
+
+  const captureMasterFocus = (target: EventTarget) => {
+    if (mobile && !detailOpen && target instanceof HTMLElement) {
+      returnFocusRef.current = target;
+    }
+  };
 
   const persist = (next: ColumnWidths) => {
     setDesired(next);
@@ -158,10 +216,20 @@ export function ResizableWorkspace({
         data-detail-open={detailOpen}
         data-testid="resizable-workspace"
       >
-        <div className="resizable-workspace__left" hidden={mobile && detailOpen}>
+        <div
+          ref={leftRef}
+          className="resizable-workspace__left"
+          hidden={mobile && detailOpen}
+          onFocusCapture={(event) => captureMasterFocus(event.target)}
+        >
           {left}
         </div>
-        <div className="resizable-workspace__center" hidden={mobile && detailOpen}>
+        <div
+          ref={centerRef}
+          className="resizable-workspace__center"
+          hidden={mobile && detailOpen}
+          onFocusCapture={(event) => captureMasterFocus(event.target)}
+        >
           {center}
         </div>
         <div
@@ -171,16 +239,22 @@ export function ResizableWorkspace({
           hidden={mobile && !detailOpen}
         >
           <button
+            ref={backRef}
             className="resizable-workspace__back"
             type="button"
             onClick={onDetailClose}
           >
-            Back to candidates
+            {backLabel}
           </button>
           {right}
         </div>
         {bottom ? (
-          <div className="resizable-workspace__bottom" hidden={mobile && detailOpen}>
+          <div
+            ref={bottomRef}
+            className="resizable-workspace__bottom"
+            hidden={mobile && detailOpen}
+            onFocusCapture={(event) => captureMasterFocus(event.target)}
+          >
             {bottom}
           </div>
         ) : null}
