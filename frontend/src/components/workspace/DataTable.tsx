@@ -1,0 +1,118 @@
+import type { KeyboardEvent, ReactNode } from 'react';
+
+export interface DataColumn<Row> {
+  id: string;
+  header: ReactNode;
+  cell(row: Row): ReactNode;
+  align?: 'left' | 'right';
+  mobilePriority?: 'essential' | 'secondary';
+}
+
+export interface DataTableProps<Row> {
+  ariaLabel: string;
+  rows: readonly Row[];
+  columns: readonly DataColumn<Row>[];
+  rowKey(row: Row): string;
+  emptyMessage: string;
+  selectedKey?: string | null;
+  onSelect?(row: Row): void;
+  rowLabel?(row: Row): string;
+  expandedKey?: string | null;
+  onToggleExpanded?(row: Row): void;
+  renderExpanded?(row: Row): ReactNode;
+}
+
+export function DataTable<Row>({
+  ariaLabel,
+  rows,
+  columns,
+  rowKey,
+  emptyMessage,
+  selectedKey,
+  onSelect,
+  rowLabel,
+  expandedKey,
+  onToggleExpanded,
+  renderExpanded,
+}: DataTableProps<Row>) {
+  const activate = (row: Row) => {
+    onSelect?.(row);
+    onToggleExpanded?.(row);
+  };
+
+  const onKeyDown = (event: KeyboardEvent<HTMLTableRowElement>, row: Row) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      activate(row);
+    }
+  };
+
+  const interactive = Boolean(onSelect || onToggleExpanded);
+
+  return (
+    <div className="data-table-wrap">
+      <table className="data-table" aria-label={ariaLabel}>
+        <thead>
+          <tr>
+            {columns.map((column) => (
+              <th
+                key={column.id}
+                scope="col"
+                className={column.align === 'right' ? 'is-numeric' : undefined}
+                data-mobile-priority={column.mobilePriority ?? 'essential'}
+              >
+                {column.header}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.length === 0 ? (
+            <tr className="data-table__empty">
+              <td colSpan={columns.length}>{emptyMessage}</td>
+            </tr>
+          ) : (
+            rows.map((row) => {
+              const key = rowKey(row);
+              const selected = selectedKey === key;
+              const expanded = expandedKey === key;
+              return [
+                <tr
+                  key={key}
+                  className={selected ? 'is-selected' : undefined}
+                  tabIndex={interactive ? 0 : undefined}
+                  aria-label={rowLabel?.(row)}
+                  aria-selected={onSelect ? selected : undefined}
+                  aria-expanded={onToggleExpanded ? expanded : undefined}
+                  onClick={interactive ? () => activate(row) : undefined}
+                  onKeyDown={
+                    interactive ? (event) => onKeyDown(event, row) : undefined
+                  }
+                >
+                  {columns.map((column) => (
+                    <td
+                      key={column.id}
+                      className={
+                        column.align === 'right' ? 'is-numeric' : undefined
+                      }
+                      data-mobile-priority={
+                        column.mobilePriority ?? 'essential'
+                      }
+                    >
+                      {column.cell(row)}
+                    </td>
+                  ))}
+                </tr>,
+                expanded && renderExpanded ? (
+                  <tr className="data-table__expanded" key={key + '-expanded'}>
+                    <td colSpan={columns.length}>{renderExpanded(row)}</td>
+                  </tr>
+                ) : null,
+              ];
+            })
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+}
