@@ -493,6 +493,7 @@ export function MonitorView(props: MonitorViewProps) {
         bottom={<ActivityBlotter audit={props.audit} />}
         detailOpen={selection.detailOpen}
         detailLabel="Candidate detail"
+        backLabel="Back to candidates"
         onDetailClose={selection.closeDetail}
       />
     </main>
