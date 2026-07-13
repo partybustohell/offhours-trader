@@ -194,7 +194,7 @@ export interface BacktestCell {
   ordersPlaced: number;
   ordersFilled: number;
   trades: number;
-  netPnlUsd: number;
+  netPnlUsd: number | null;
 }
 export interface BacktestTrade {
   day: string;

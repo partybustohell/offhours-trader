@@ -85,6 +85,108 @@ describe('BacktestView', () => {
     expect([...points].map((point) => point.getAttribute('cx'))).toEqual(['360', '360']);
   });
 
+  it('keeps configured duplicate thresholds as unconnected accessible points', () => {
+    render(
+      <BacktestView
+        backtest={{
+          ...backtestFixture,
+          cells: [
+            {
+              ...backtestFixture.cells![0],
+              cell: 'bear-light',
+              threshold: 0.7,
+              bearWeight: 0.8,
+              netPnlUsd: 10,
+            },
+            {
+              ...backtestFixture.cells![0],
+              cell: 'bear-heavy',
+              threshold: 0.7,
+              bearWeight: 1.6,
+              netPnlUsd: -5,
+            },
+          ],
+        }}
+      />,
+    );
+
+    const chart = screen.getByRole('img', {
+      name: 'Net P&L by confidence threshold',
+    });
+    const points = [...chart.querySelectorAll('circle')];
+    expect(points).toHaveLength(2);
+    expect(points[0]).toHaveAttribute('cx', points[1].getAttribute('cx'));
+    expect(chart.querySelector('polyline')).not.toBeInTheDocument();
+    expect(screen.getByText(/points are unconnected because other sweep parameters may differ/i))
+      .toBeVisible();
+
+    const pointList = screen.getByRole('list', {
+      name: 'Backtest chart point values',
+    });
+    const values = within(pointList).getAllByRole('listitem');
+    expect(values).toHaveLength(2);
+    expect(values[0]).toHaveTextContent('bear-light');
+    expect(values[0]).toHaveTextContent('70%');
+    expect(values[0]).toHaveTextContent('0.8');
+    expect(values[0]).toHaveTextContent('+$10.00');
+    expect(values[1]).toHaveTextContent('bear-heavy');
+    expect(values[1]).toHaveTextContent('1.6');
+    expect(values[1]).toHaveTextContent('-$5.00');
+
+    expect(points[0]).toHaveAttribute(
+      'aria-label',
+      'Cell bear-light; Confidence 70%; Bear weight 0.8; Net P&L +$10.00',
+    );
+    expect(points[0]).toHaveAttribute('tabindex', '0');
+    const describedBy = points[0].getAttribute('aria-describedby');
+    expect(describedBy).toBeTruthy();
+    expect(document.getElementById(describedBy!)).toBe(values[0]);
+    points[0].focus();
+    expect(points[0]).toHaveFocus();
+  });
+
+  it('shows Bear weight and keeps unavailable net values out of the chart', async () => {
+    render(
+      <BacktestView
+        backtest={{
+          ...backtestFixture,
+          cells: [
+            {
+              ...backtestFixture.cells![0],
+              cell: 'modern-bear',
+              bear: undefined,
+              bearWeight: 1.2,
+            },
+            {
+              ...backtestFixture.cells![0],
+              cell: 'net-missing',
+              bear: undefined,
+              bearWeight: undefined,
+              netPnlUsd: null,
+            },
+          ],
+        }}
+      />,
+    );
+
+    const chart = screen.getByRole('img', {
+      name: 'Net P&L by confidence threshold',
+    });
+    expect(chart.querySelectorAll('circle')).toHaveLength(1);
+    expect(screen.queryByText('net-missing')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('tab', { name: 'Sweep' }));
+    const table = screen.getByRole('table', { name: 'Backtest sweep' });
+    expect(within(table).getByRole('columnheader', { name: 'Bear weight' })).toBeVisible();
+    const modernRow = within(table).getByText('modern-bear').closest('tr');
+    expect(modernRow).not.toBeNull();
+    expect(within(modernRow!).getByText('1.2')).toBeVisible();
+    const missingRow = within(table).getByText('net-missing').closest('tr');
+    expect(missingRow).not.toBeNull();
+    expect(within(missingRow!).getByText('Not recorded')).toBeVisible();
+    expect(within(missingRow!).getByText('Not available')).toBeVisible();
+  });
+
   it('uses signed semantic P&L text only for finite nonzero values', async () => {
     render(
       <BacktestView

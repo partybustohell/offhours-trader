@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { DataTable } from '../components/workspace/DataTable';
 import { Pane } from '../components/workspace/Pane';
 import { StatusMessage } from '../components/workspace/StatusMessage';
@@ -25,18 +25,39 @@ function recordedText(value: string | null | undefined): string {
   return text ? text : 'Not recorded';
 }
 
-function pnlText(value: number) {
-  const recorded = Number.isFinite(value);
+function formattedPnl(value: number | null | undefined): string {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0
+    ? '+' + formatUsd(value)
+    : formatUsd(value);
+}
+
+function pnlText(value: number | null | undefined) {
+  const recorded = typeof value === 'number' && Number.isFinite(value);
   const className = !recorded || value === 0
     ? undefined
     : value > 0
       ? 'semantic-text--positive'
       : 'semantic-text--negative';
-  const text = recorded && value > 0 ? '+' + formatUsd(value) : formatUsd(value);
-  return <span className={className}>{text}</span>;
+  return <span className={className}>{formattedPnl(value)}</span>;
+}
+
+function formatBearWeight(value: number | null | undefined): string {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? value.toFixed(1)
+    : 'Not recorded';
+}
+
+function chartPointLabel(point: ReturnType<typeof buildBacktestPoints>[number]) {
+  return [
+    'Cell ' + recordedText(point.key),
+    'Confidence ' + formatPercent(point.threshold),
+    'Bear weight ' + formatBearWeight(point.bearWeight),
+    'Net P&L ' + formattedPnl(point.pnl),
+  ].join('; ');
 }
 
 function PnlChart({ backtest }: { backtest: BacktestResponse }) {
+  const pointListId = useId();
   const points = buildBacktestPoints(backtest.cells ?? []);
   if (points.length === 0) {
     return (
@@ -88,18 +109,15 @@ function PnlChart({ backtest }: { backtest: BacktestResponse }) {
           y2={zeroY}
           className="chart-zero"
         />
-        <polyline
-          points={coordinates
-            .map((point) => point.x + ',' + point.y)
-            .join(' ')}
-          className="chart-line"
-        />
         {coordinates.map((point, index) => (
           <circle
             key={point.key + ':' + index}
             cx={point.x}
             cy={point.y}
             r="3"
+            tabIndex={0}
+            aria-label={chartPointLabel(point)}
+            aria-describedby={pointListId + '-point-' + index}
           >
             <title>
               {formatPercent(point.threshold) + ': ' + formatUsd(point.pnl)}
@@ -108,8 +126,19 @@ function PnlChart({ backtest }: { backtest: BacktestResponse }) {
         ))}
       </svg>
       <figcaption>
-        Net P&amp;L returned for each confidence threshold.
+        Net P&amp;L returned for each confidence threshold. Points are unconnected
+        because other sweep parameters may differ.
       </figcaption>
+      <ul className="backtest-point-list" aria-label="Backtest chart point values">
+        {coordinates.map((point, index) => (
+          <li id={pointListId + '-point-' + index} key={point.key + ':' + index}>
+            <span>Cell {recordedText(point.key)}</span>
+            <span>Confidence {formatPercent(point.threshold)}</span>
+            <span>Bear weight {formatBearWeight(point.bearWeight)}</span>
+            <span>Net P&amp;L {pnlText(point.pnl)}</span>
+          </li>
+        ))}
+      </ul>
     </figure>
   );
 }
@@ -167,6 +196,12 @@ export function BacktestView({ backtest }: BacktestViewProps) {
                 id: 'threshold',
                 header: 'Confidence threshold',
                 cell: (row) => formatPercent(row.threshold),
+                align: 'right',
+              },
+              {
+                id: 'bear-weight',
+                header: 'Bear weight',
+                cell: (row) => formatBearWeight(row.bearWeight ?? row.bear),
                 align: 'right',
               },
               {
