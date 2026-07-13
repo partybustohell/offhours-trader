@@ -35,6 +35,10 @@ interface FilteredResearchSymbol extends ResearchSymbol {
   reason: string;
 }
 
+interface PlanResearchSymbol extends ResearchSymbol {
+  outcome: 'Selected' | 'Not selected';
+}
+
 function symbolKey(item: ResearchSymbol): string {
   return item.symbol;
 }
@@ -51,6 +55,19 @@ function requiredAnalystCount(config: Config | null): string {
   return config && Number.isFinite(config.min_agreeing)
     ? String(config.min_agreeing)
     : 'Not recorded';
+}
+
+function planRows(plan: Thesis | null): PlanResearchSymbol[] {
+  const rows = new Map<string, PlanResearchSymbol>();
+  plan?.entries.forEach((item) => {
+    rows.set(item.ticker, { symbol: item.ticker, outcome: 'Selected' });
+  });
+  plan?.skipped.forEach((item) => {
+    if (!rows.has(item.ticker)) {
+      rows.set(item.ticker, { symbol: item.ticker, outcome: 'Not selected' });
+    }
+  });
+  return [...rows.values()];
 }
 
 export function ResearchView({
@@ -80,10 +97,11 @@ export function ResearchView({
     symbol: item.ticker,
     reason: item.reason,
   })) ?? [];
-  const offhoursRows = offhoursPlan?.entries.map((item) => ({ symbol: item.ticker })) ?? [];
-  const rthRows = rthPlan?.entries.map((item) => ({ symbol: item.ticker })) ?? [];
-  const basicColumns: DataColumn<ResearchSymbol>[] = [
+  const offhoursRows = planRows(offhoursPlan);
+  const rthRows = planRows(rthPlan);
+  const planColumns: DataColumn<PlanResearchSymbol>[] = [
     { id: 'symbol', header: 'Symbol', cell: (row) => row.symbol },
+    { id: 'outcome', header: 'Outcome', cell: (row) => row.outcome },
   ];
 
   const selectSymbol = (row: ResearchSymbol) => {
@@ -155,27 +173,27 @@ export function ResearchView({
         />
       ) : null}
       {tab === 'offhours' ? (
-        <DataTable
+        <DataTable<PlanResearchSymbol>
           ariaLabel="Off-hours trading plan"
           rows={offhoursRows}
-          columns={basicColumns}
+          columns={planColumns}
           rowKey={symbolKey}
           rowLabel={(row) => 'Inspect ' + row.symbol + ' research'}
           selectedKey={selection.selectedKey}
           onSelect={selectSymbol}
-          emptyMessage="No off-hours plan entries were recorded."
+          emptyMessage="No off-hours plan symbols were recorded."
         />
       ) : null}
       {tab === 'rth' ? (
-        <DataTable
+        <DataTable<PlanResearchSymbol>
           ariaLabel="Regular-session trading plan"
           rows={rthRows}
-          columns={basicColumns}
+          columns={planColumns}
           rowKey={symbolKey}
           rowLabel={(row) => 'Inspect ' + row.symbol + ' research'}
           selectedKey={selection.selectedKey}
           onSelect={selectSymbol}
-          emptyMessage="No regular-session plan entries were recorded."
+          emptyMessage="No regular-session plan symbols were recorded."
         />
       ) : null}
     </Pane>
@@ -193,6 +211,9 @@ export function ResearchView({
     selectedPlan?.entries.find((item) => item.ticker === selected) ?? null;
   const skipped =
     selectedPlan?.skipped.find((item) => item.ticker === selected) ?? null;
+  const invalidationConditions = selectedEntry?.invalidationConditions
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0) ?? [];
 
   const detail = (
     <Pane id="research-detail" title="Research detail" subtitle={selected ?? undefined}>
@@ -297,9 +318,11 @@ export function ResearchView({
           />
           <section>
             <h3>Invalidation conditions</h3>
-            {selectedEntry?.invalidationConditions.length ? (
+            {invalidationConditions.length ? (
               <ul>
-                {selectedEntry.invalidationConditions.map((item) => <li key={item}>{item}</li>)}
+                {invalidationConditions.map((item, index) => (
+                  <li key={String(index) + ':' + item}>{item}</li>
+                ))}
               </ul>
             ) : <p>Not recorded</p>}
           </section>
@@ -315,6 +338,15 @@ export function ResearchView({
         detail={detail}
         detailOpen={selection.detailOpen}
         detailLabel="Research detail"
+        backLabel={
+          tab === 'filtered'
+            ? 'Back to filtered out'
+            : tab === 'offhours'
+              ? 'Back to off-hours plan'
+              : tab === 'rth'
+                ? 'Back to regular-session plan'
+                : 'Back to candidates'
+        }
         onDetailClose={selection.closeDetail}
       />
     </main>
