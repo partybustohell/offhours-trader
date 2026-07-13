@@ -133,7 +133,9 @@ export default function App() {
         <main className="view" key={view}>
           {view === 'overview' && <Overview d={d} go={go} activeThesis={activeThesis} />}
           {view === 'thesis' && <ThesisView d={d} />}
-          {view === 'positions' && <PositionsView d={d} />}
+          {view === 'positions' && (
+            <PositionsView positions={d.positions} orders={d.orders} audit={d.audit} />
+          )}
           {view === 'backtest' && <BacktestView d={d} />}
           {view === 'config' && <ConfigView d={d} onSaved={refresh} />}
           {view === 'audit' && <AuditView d={d} />}
