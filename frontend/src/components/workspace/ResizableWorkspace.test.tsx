@@ -1,0 +1,91 @@
+import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, it } from 'vitest';
+import { setViewport } from '../../test/viewport';
+import { ResizableWorkspace, fitWidths } from './ResizableWorkspace';
+
+const props = {
+  storageKey: 'offhours.monitor.columns.v1',
+  defaults: { left: 260, right: 360 },
+  constraints: {
+    left: [220, 360] as const,
+    centerMin: 480,
+    right: [300, 480] as const,
+  },
+  left: <div>Account</div>,
+  center: <div>Candidates</div>,
+  right: <div>Detail</div>,
+  bottom: <div>Activity</div>,
+};
+
+describe('fitWidths', () => {
+  it('fits the 1024px boundary without shrinking center below 480px', () => {
+    expect(fitWidths(1024, props.defaults, props.constraints)).toEqual({
+      left: 242,
+      right: 300,
+    });
+  });
+});
+
+describe('ResizableWorkspace', () => {
+  it('restores valid versioned storage and ignores malformed storage', () => {
+    setViewport(1440, 900);
+    localStorage.setItem(
+      props.storageKey,
+      JSON.stringify({ version: 1, left: 300, right: 420 }),
+    );
+    const { unmount } = render(<ResizableWorkspace {...props} />);
+    expect(screen.getByRole('separator', { name: 'Resize account pane' })).toHaveAttribute(
+      'aria-valuenow',
+      '300',
+    );
+    unmount();
+
+    localStorage.setItem(props.storageKey, '{"version":1,"left":"bad"}');
+    render(<ResizableWorkspace {...props} />);
+    expect(screen.getByRole('separator', { name: 'Resize account pane' })).toHaveAttribute(
+      'aria-valuenow',
+      '260',
+    );
+  });
+
+  it('supports arrow resizing, persistence, and double-click reset', () => {
+    setViewport(1440, 900);
+    render(<ResizableWorkspace {...props} />);
+    const separator = screen.getByRole('separator', { name: 'Resize account pane' });
+    fireEvent.keyDown(separator, { key: 'ArrowRight' });
+    expect(separator).toHaveAttribute('aria-valuenow', '270');
+    expect(JSON.parse(localStorage.getItem(props.storageKey) ?? '{}')).toMatchObject({
+      version: 1,
+      left: 270,
+    });
+
+    fireEvent.doubleClick(separator);
+    expect(separator).toHaveAttribute('aria-valuenow', '260');
+    expect(localStorage.getItem(props.storageKey)).toBeNull();
+  });
+
+  it.each([900, 1015])(
+    'removes separators at %ipx below the 1016px three-column threshold',
+    (width) => {
+      setViewport(width, 700);
+      render(<ResizableWorkspace {...props} />);
+
+      expect(screen.queryByRole('separator')).not.toBeInTheDocument();
+      expect(screen.getByTestId('resizable-workspace')).toHaveAttribute(
+        'data-layout',
+        'compact',
+      );
+    },
+  );
+
+  it('renders the three-column resize handles at 1016px', () => {
+    setViewport(1016, 700);
+    render(<ResizableWorkspace {...props} />);
+
+    expect(screen.getAllByRole('separator')).toHaveLength(2);
+    expect(screen.getByTestId('resizable-workspace')).toHaveAttribute(
+      'data-layout',
+      'wide',
+    );
+  });
+});
