@@ -7,10 +7,12 @@ import { ActionControl } from './ActionControl';
 
 function createDeferred() {
   let resolve!: () => void;
-  const promise = new Promise<void>((fulfill) => {
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<void>((fulfill, fail) => {
     resolve = fulfill;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 function renderHaltControl(onInvoke = vi.fn().mockResolvedValue(undefined)) {
@@ -232,6 +234,63 @@ describe('ActionControl', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Execution check failed. Broker did not respond. Order submission could not be confirmed. Check broker activity before retrying.',
     );
+  });
+
+  it('overrides stale external pending after a caught rejection and allows guarded retry', async () => {
+    const user = userEvent.setup();
+    const first = createDeferred();
+    const retry = createDeferred();
+    let invocation = 0;
+    let setActionState: Dispatch<SetStateAction<ActionState>> = () => undefined;
+    const onInvoke = vi.fn(async () => {
+      setActionState({ phase: 'pending', startedAt: 1 });
+      invocation += 1;
+      await (invocation === 1 ? first.promise : retry.promise);
+    });
+
+    function Harness() {
+      const [state, setState] = useState<ActionState>({ phase: 'idle' });
+      setActionState = setState;
+      return (
+        <ActionControl
+          action="executionCheck"
+          label="Check execution now"
+          state={state}
+          onInvoke={onInvoke}
+        />
+      );
+    }
+
+    render(<Harness />);
+    const trigger = screen.getByRole('button', { name: 'Check execution now' });
+    await user.click(trigger);
+    expect(trigger).toBeDisabled();
+
+    await act(async () => first.reject(new Error('Broker did not respond.')));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Execution check failed. Broker did not respond. Order submission could not be confirmed. Check broker activity before retrying.',
+    );
+    expect(trigger).toBeEnabled();
+    expect(trigger).toHaveFocus();
+
+    act(() => {
+      trigger.click();
+      trigger.click();
+    });
+    expect(onInvoke).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(trigger).toBeDisabled();
+
+    act(() =>
+      setActionState({
+        phase: 'success',
+        message: 'Execution check completed.',
+        completedAt: 2,
+      }),
+    );
+    await act(async () => retry.resolve());
+    await waitFor(() => expect(trigger).toBeEnabled());
   });
 
   it('announces an execution failure without implying that an order was placed', () => {

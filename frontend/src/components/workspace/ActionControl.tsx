@@ -57,7 +57,7 @@ export function ActionControl({
   const cancelRef = useRef<HTMLButtonElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
   const inFlightRef = useRef(false);
-  const pending = state.phase === 'pending' || localPending;
+  const pending = localError === null && (state.phase === 'pending' || localPending);
 
   useEffect(() => {
     if (confirming) cancelRef.current?.focus();
