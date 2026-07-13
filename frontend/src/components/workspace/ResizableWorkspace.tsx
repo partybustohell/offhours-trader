@@ -33,6 +33,7 @@ export interface ResizableWorkspaceProps {
 }
 
 const dividerWidth = 1;
+const mobileDetailBreakpoint = 900;
 const wideWorkspaceMin = 1016;
 
 function clamp(value: number, min: number, max: number): number {
@@ -104,6 +105,7 @@ export function ResizableWorkspace({
   }, []);
 
   const wide = viewportWidth >= wideWorkspaceMin;
+  const mobile = viewportWidth < mobileDetailBreakpoint;
   const effective = useMemo(
     () => fitWidths(viewportWidth, desired, constraints),
     [constraints, desired, viewportWidth],
@@ -156,9 +158,18 @@ export function ResizableWorkspace({
         data-detail-open={detailOpen}
         data-testid="resizable-workspace"
       >
-        <div className="resizable-workspace__left">{left}</div>
-        <div className="resizable-workspace__center">{center}</div>
-        <div className="resizable-workspace__right" role="group" aria-label={detailLabel}>
+        <div className="resizable-workspace__left" hidden={mobile && detailOpen}>
+          {left}
+        </div>
+        <div className="resizable-workspace__center" hidden={mobile && detailOpen}>
+          {center}
+        </div>
+        <div
+          className="resizable-workspace__right"
+          role="group"
+          aria-label={detailLabel}
+          hidden={mobile && !detailOpen}
+        >
           <button
             className="resizable-workspace__back"
             type="button"
@@ -168,7 +179,11 @@ export function ResizableWorkspace({
           </button>
           {right}
         </div>
-        {bottom ? <div className="resizable-workspace__bottom">{bottom}</div> : null}
+        {bottom ? (
+          <div className="resizable-workspace__bottom" hidden={mobile && detailOpen}>
+            {bottom}
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -200,10 +215,14 @@ export function ResizableWorkspace({
         aria-valuenow={current}
         tabIndex={0}
         onKeyDown={(event) => {
-          if (event.key === 'ArrowLeft') resize(side, current - 10 * direction);
-          if (event.key === 'ArrowRight') resize(side, current + 10 * direction);
-          if (event.key === 'Home') resize(side, bounds[0]);
-          if (event.key === 'End') resize(side, maximum);
+          let requested: number;
+          if (event.key === 'ArrowLeft') requested = current - 10 * direction;
+          else if (event.key === 'ArrowRight') requested = current + 10 * direction;
+          else if (event.key === 'Home') requested = bounds[0];
+          else if (event.key === 'End') requested = maximum;
+          else return;
+          event.preventDefault();
+          resize(side, requested);
         }}
         onPointerDown={(event) => beginDrag(side, event)}
         onPointerMove={moveDrag}

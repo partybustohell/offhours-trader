@@ -1,7 +1,17 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { useState, type Dispatch, type SetStateAction } from 'react';
 import { describe, expect, it, vi } from 'vitest';
+import type { ActionState } from '../../app/operatorState';
 import { ActionControl } from './ActionControl';
+
+function createDeferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>((fulfill) => {
+    resolve = fulfill;
+  });
+  return { promise, resolve };
+}
 
 function renderHaltControl(onInvoke = vi.fn().mockResolvedValue(undefined)) {
   render(
@@ -85,6 +95,143 @@ describe('ActionControl', () => {
     await waitFor(() => expect(onInvoke).toHaveBeenCalledWith('halt'));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
+  });
+
+  it('waits for local and parent pending state to clear before restoring focus', async () => {
+    const user = userEvent.setup();
+    const deferred = createDeferred();
+    let setActionState: Dispatch<SetStateAction<ActionState>> = () => undefined;
+    const onInvoke = vi.fn(async () => {
+      setActionState({ phase: 'pending', startedAt: 1 });
+      await deferred.promise;
+    });
+
+    function Harness() {
+      const [state, setState] = useState<ActionState>({ phase: 'idle' });
+      setActionState = setState;
+      return (
+        <ActionControl
+          action="halt"
+          label="Halt trading"
+          state={state}
+          tone="danger"
+          confirmation={{
+            title: 'Halt trading?',
+            body: 'New entries will remain blocked until trading is resumed.',
+            confirmLabel: 'Halt trading',
+          }}
+          onInvoke={onInvoke}
+        />
+      );
+    }
+
+    render(<Harness />);
+    const trigger = screen.getByRole('button', { name: 'Halt trading' });
+    await user.click(trigger);
+    const focusSpy = vi.spyOn(trigger, 'focus');
+
+    await user.click(screen.getByRole('button', { name: 'Confirm halt trading' }));
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(trigger).toBeDisabled();
+    expect(focusSpy).not.toHaveBeenCalled();
+
+    await act(async () => deferred.resolve());
+    expect(trigger).toBeDisabled();
+    expect(focusSpy).not.toHaveBeenCalled();
+
+    act(() => setActionState({ phase: 'success', message: 'Trading halted.', completedAt: 2 }));
+    await waitFor(() => expect(trigger).toHaveFocus());
+    expect(focusSpy).toHaveBeenCalledOnce();
+  });
+
+  it('prevents same-tick duplicate routine invokes', async () => {
+    const deferred = createDeferred();
+    const onInvoke = vi.fn(() => deferred.promise);
+    render(
+      <ActionControl
+        action="analysis"
+        label="Run analysis"
+        state={{ phase: 'idle' }}
+        onInvoke={onInvoke}
+      />,
+    );
+    const trigger = screen.getByRole('button', { name: 'Run analysis' });
+
+    act(() => {
+      trigger.click();
+      trigger.click();
+    });
+
+    expect(onInvoke).toHaveBeenCalledOnce();
+    expect(trigger).toBeDisabled();
+    await act(async () => deferred.resolve());
+  });
+
+  it('prevents same-tick duplicate confirmed invokes', async () => {
+    const user = userEvent.setup();
+    const deferred = createDeferred();
+    const { onInvoke, trigger } = renderHaltControl(
+      vi.fn(() => deferred.promise),
+    );
+    await user.click(trigger);
+    const confirm = screen.getByRole('button', { name: 'Confirm halt trading' });
+
+    act(() => {
+      confirm.click();
+      confirm.click();
+    });
+
+    expect(onInvoke).toHaveBeenCalledOnce();
+    expect(trigger).toBeDisabled();
+    await act(async () => deferred.resolve());
+  });
+
+  it('catches a rejected invoke, reports it, restores focus, and allows retry', async () => {
+    const user = userEvent.setup();
+    const onInvoke = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('Service unavailable.'))
+      .mockResolvedValueOnce(undefined);
+    render(
+      <ActionControl
+        action="analysis"
+        label="Run analysis"
+        state={{ phase: 'idle' }}
+        onInvoke={onInvoke}
+      />,
+    );
+    const trigger = screen.getByRole('button', { name: 'Run analysis' });
+
+    await user.click(trigger);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Run analysis failed. Service unavailable.',
+    );
+    expect(trigger).toBeEnabled();
+    expect(trigger).toHaveFocus();
+
+    await user.click(trigger);
+    await waitFor(() => expect(onInvoke).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('uses conservative wording when an execution check invoke rejects', async () => {
+    const user = userEvent.setup();
+    render(
+      <ActionControl
+        action="executionCheck"
+        label="Check execution now"
+        state={{ phase: 'idle' }}
+        onInvoke={vi.fn().mockRejectedValue(new Error('Broker did not respond.'))}
+      />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Check execution now' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Execution check failed. Broker did not respond. Order submission could not be confirmed. Check broker activity before retrying.',
+    );
   });
 
   it('announces an execution failure without implying that an order was placed', () => {

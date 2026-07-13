@@ -1,6 +1,31 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ActionState, OperatorAction } from '../../app/operatorState';
 
+function punctuate(message: string): string {
+  return /[.!?]$/.test(message) ? message : message + '.';
+}
+
+function rejectionMessage(
+  action: OperatorAction,
+  label: string,
+  error: unknown,
+): string {
+  const raw = error instanceof Error
+    ? error.message.trim()
+    : typeof error === 'string'
+      ? error.trim()
+      : '';
+  const detail = punctuate(raw || 'The action did not complete.');
+  if (action === 'executionCheck') {
+    return (
+      'Execution check failed. ' +
+      detail +
+      ' Order submission could not be confirmed. Check broker activity before retrying.'
+    );
+  }
+  return label + ' failed. ' + detail;
+}
+
 export interface ActionControlProps {
   action: OperatorAction;
   label: string;
@@ -25,17 +50,31 @@ export function ActionControl({
   onInvoke,
 }: ActionControlProps) {
   const [confirming, setConfirming] = useState(false);
+  const [localPending, setLocalPending] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
+  const [restoreFocus, setRestoreFocus] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
   const confirmRef = useRef<HTMLButtonElement>(null);
-  const pending = state.phase === 'pending';
+  const inFlightRef = useRef(false);
+  const pending = state.phase === 'pending' || localPending;
 
   useEffect(() => {
     if (confirming) cancelRef.current?.focus();
   }, [confirming]);
 
+  useEffect(() => {
+    const trigger = triggerRef.current;
+    if (!restoreFocus || pending || disabled || !trigger || trigger.disabled) return;
+    trigger.focus();
+    setRestoreFocus(false);
+  }, [disabled, pending, restoreFocus]);
+
   const restoreTriggerFocus = () => {
-    window.setTimeout(() => triggerRef.current?.focus(), 0);
+    window.setTimeout(() => {
+      const trigger = triggerRef.current;
+      if (trigger && !trigger.disabled) trigger.focus();
+    }, 0);
   };
 
   const close = () => {
@@ -44,9 +83,24 @@ export function ActionControl({
   };
 
   const invoke = async () => {
-    if (confirming) close();
-    await onInvoke(action);
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
+    setConfirming(false);
+    setLocalPending(true);
+    setLocalError(null);
+    setRestoreFocus(false);
+    try {
+      await onInvoke(action);
+    } catch (error) {
+      setLocalError(rejectionMessage(action, label, error));
+    } finally {
+      inFlightRef.current = false;
+      setLocalPending(false);
+      setRestoreFocus(true);
+    }
   };
+
+  const errorMessage = localError ?? (state.phase === 'error' ? state.message : null);
 
   return (
     <div className={'action-control action-control--' + tone}>
@@ -107,14 +161,14 @@ export function ActionControl({
           </div>
         </div>
       ) : null}
-      {state.phase === 'success' ? (
+      {state.phase === 'success' && localError === null ? (
         <div className="action-control__result is-success" role="status" aria-live="polite">
           {state.message}
         </div>
       ) : null}
-      {state.phase === 'error' ? (
+      {errorMessage !== null ? (
         <div className="action-control__result is-error" role="alert" aria-live="assertive">
-          {state.message}
+          {errorMessage}
         </div>
       ) : null}
     </div>
