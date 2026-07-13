@@ -28,7 +28,9 @@ export function buildRiskRejections(
 ): RiskRejectionRow[] {
   const today = etDate(now);
   return events.flatMap((event, index): RiskRejectionRow[] => {
-    if (event.kind !== 'order_rejected' || etDate(new Date(event.ts)) !== today) return [];
+    if (event.kind !== 'order_rejected') return [];
+    const timestamp = new Date(event.ts);
+    if (!Number.isFinite(timestamp.getTime()) || etDate(timestamp) !== today) return [];
     const data = typeof event.data === 'object' && event.data !== null
       ? event.data as Record<string, unknown>
       : {};

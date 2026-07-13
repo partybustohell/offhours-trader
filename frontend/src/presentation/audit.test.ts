@@ -17,6 +17,15 @@ describe('presentAuditEvent', () => {
     });
   });
 
+  it('keeps unknown kinds unknown when their data reports a skipped status', () => {
+    const event = presentAuditEvent({
+      ts: '2026-07-12T14:00:00.000Z',
+      kind: 'broker_heartbeat',
+      data: { status: 'skipped' },
+    });
+    expect(event.status).toBe('unknown');
+  });
+
   it('states a closed-session execution skip clinically', () => {
     const event = presentAuditEvent({
       ts: '2026-07-12T14:00:00.000Z',

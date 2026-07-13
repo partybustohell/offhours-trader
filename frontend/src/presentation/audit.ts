@@ -46,12 +46,12 @@ function objectData(data: unknown): Record<string, unknown> {
 }
 
 function classify(kind: string, data: Record<string, unknown>): ActivityStatus {
+  if (!KNOWN_AUDIT_KINDS.includes(kind as KnownAuditKind)) return 'unknown';
   if (kind === 'error') return 'failed';
   if (kind === 'order_rejected') return 'rejected';
   if (kind === 'halt') return 'halted';
   if (kind === 'proposed_order') return 'pending';
   if (data.status === 'skipped' || data.skipped === true) return 'skipped';
-  if (!KNOWN_AUDIT_KINDS.includes(kind as KnownAuditKind)) return 'unknown';
   return 'completed';
 }
 
