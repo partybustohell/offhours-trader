@@ -33,6 +33,7 @@ function NumberField({
   step = '1',
   min,
   max,
+  disabled,
   onChange,
 }: {
   label: string;
@@ -42,6 +43,7 @@ function NumberField({
   step?: string;
   min?: string;
   max?: string;
+  disabled: boolean;
   onChange(value: string): void;
 }) {
   const inputId = 'configuration-' + errorName.replace('.', '-');
@@ -58,6 +60,7 @@ function NumberField({
         max={max}
         step={step}
         value={value}
+        disabled={disabled}
         aria-invalid={error ? true : undefined}
         aria-describedby={error ? errorId : undefined}
         onChange={(event) => onChange(event.target.value)}
@@ -103,6 +106,7 @@ export function ConfigurationView({
     );
   }
 
+  const saving = controller.phase === 'saving';
   const patchNumber = (
     name: Exclude<ConfigDraftNumericField, `weights.${string}`>,
     value: string,
@@ -155,6 +159,7 @@ export function ConfigurationView({
               errorName="nominations_per_agent"
               value={draft.nominations_per_agent}
               errors={controller.fieldErrors}
+              disabled={saving}
               onChange={(value) => patchNumber('nominations_per_agent', value)}
             />
             <NumberField
@@ -162,6 +167,7 @@ export function ConfigurationView({
               errorName="max_candidates"
               value={draft.max_candidates}
               errors={controller.fieldErrors}
+              disabled={saving}
               onChange={(value) => patchNumber('max_candidates', value)}
             />
             <NumberField
@@ -170,6 +176,7 @@ export function ConfigurationView({
               value={draft.min_price}
               errors={controller.fieldErrors}
               step="0.01"
+              disabled={saving}
               onChange={(value) => patchNumber('min_price', value)}
             />
             <NumberField
@@ -178,6 +185,7 @@ export function ConfigurationView({
               value={draft.min_avg_dollar_volume}
               errors={controller.fieldErrors}
               step="1000000"
+              disabled={saving}
               onChange={(value) => patchNumber('min_avg_dollar_volume', value)}
             />
             <div className="field field--wide">
@@ -189,6 +197,7 @@ export function ConfigurationView({
                     <button
                       type="button"
                       aria-label={'Remove ' + symbol}
+                      disabled={saving}
                       onClick={() => controller.patch({
                         exclude: draft.exclude.filter((item) => item !== symbol),
                       })}
@@ -202,6 +211,7 @@ export function ConfigurationView({
                 <input
                   aria-label="Symbol to exclude"
                   value={exclude}
+                  disabled={saving}
                   onChange={(event) => setExclude(event.target.value)}
                   onKeyDown={(event) => {
                     if (event.key === 'Enter') {
@@ -210,7 +220,9 @@ export function ConfigurationView({
                     }
                   }}
                 />
-                <button type="button" onClick={addExclude}>Add symbol</button>
+                <button type="button" disabled={saving} onClick={addExclude}>
+                  Add symbol
+                </button>
               </div>
             </div>
           </Group>
@@ -225,6 +237,7 @@ export function ConfigurationView({
                 <input
                   type="checkbox"
                   checked={draft[name]}
+                  disabled={saving}
                   onChange={(event) => controller.patch({
                     [name]: event.target.checked,
                   } as Partial<ConfigDraft>)}
@@ -236,6 +249,7 @@ export function ConfigurationView({
               <span>Data feed</span>
               <select
                 value={draft.data_feed}
+                disabled={saving}
                 onChange={(event) => controller.patch({
                   data_feed: event.target.value as 'iex' | 'sip',
                 })}
@@ -249,6 +263,7 @@ export function ConfigurationView({
               errorName="max_quote_age_sec"
               value={draft.max_quote_age_sec}
               errors={controller.fieldErrors}
+              disabled={saving}
               onChange={(value) => patchNumber('max_quote_age_sec', value)}
             />
           </Group>
@@ -264,6 +279,7 @@ export function ConfigurationView({
                 min="0"
                 max="2"
                 step="0.1"
+                disabled={saving}
                 onChange={(value) => controller.patch({
                   weights: { ...draft.weights, [analyst]: value },
                 })}
@@ -278,6 +294,7 @@ export function ConfigurationView({
               value={draft.conviction_threshold}
               errors={controller.fieldErrors}
               step="0.01"
+              disabled={saving}
               onChange={(value) => patchNumber('conviction_threshold', value)}
             />
             <NumberField
@@ -285,6 +302,7 @@ export function ConfigurationView({
               errorName="quorum"
               value={draft.quorum}
               errors={controller.fieldErrors}
+              disabled={saving}
               onChange={(value) => patchNumber('quorum', value)}
             />
             <NumberField
@@ -292,6 +310,7 @@ export function ConfigurationView({
               errorName="min_agreeing"
               value={draft.min_agreeing}
               errors={controller.fieldErrors}
+              disabled={saving}
               onChange={(value) => patchNumber('min_agreeing', value)}
             />
           </Group>
@@ -315,6 +334,7 @@ export function ConfigurationView({
                 value={draft[name]}
                 errors={controller.fieldErrors}
                 step={step}
+                disabled={saving}
                 onChange={(value) => patchNumber(name, value)}
               />
             ))}
@@ -326,6 +346,7 @@ export function ConfigurationView({
               errorName="executor_interval_min"
               value={draft.executor_interval_min}
               errors={controller.fieldErrors}
+              disabled={saving}
               onChange={(value) => patchNumber('executor_interval_min', value)}
             />
             <label className="field">
@@ -333,6 +354,7 @@ export function ConfigurationView({
               <input
                 type="time"
                 value={draft.thesis_run_time_et}
+                disabled={saving}
                 onChange={(event) => controller.patch({
                   thesis_run_time_et: event.target.value,
                 })}
@@ -351,6 +373,7 @@ export function ConfigurationView({
                 <input
                   type="text"
                   value={draft[name]}
+                  disabled={saving}
                   onChange={(event) => controller.patch({
                     [name]: event.target.value,
                   } as Partial<ConfigDraft>)}
@@ -366,7 +389,7 @@ export function ConfigurationView({
               disabled={
                 controller.phase === 'clean'
                 || controller.phase === 'loading'
-                || controller.phase === 'saving'
+                || saving
               }
             >
               Discard local edits
@@ -376,8 +399,11 @@ export function ConfigurationView({
               className="is-primary"
               onClick={() => void controller.save()}
               disabled={
-                controller.phase !== 'dirty'
-                && controller.phase !== 'error'
+                saving
+                || (
+                  controller.phase !== 'dirty'
+                  && controller.phase !== 'error'
+                )
               }
             >
               {controller.phase === 'saving'

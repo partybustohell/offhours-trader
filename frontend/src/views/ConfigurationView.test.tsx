@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { configFixture } from '../test/fixtures';
@@ -29,6 +29,34 @@ describe('ConfigurationView', () => {
 
     await user.click(screen.getByRole('button', { name: 'Discard local edits' }));
     expect(field).toHaveValue(0.75);
+  });
+
+  it('withdraws a newer-server warning when polling returns to the baseline', async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    const { rerender } = render(
+      <ConfigurationView config={configFixture} onSave={onSave} />,
+    );
+    const field = screen.getByLabelText('Confidence threshold');
+    const warning =
+      'Newer server configuration is available. Your local edits have not been changed.';
+    await user.clear(field);
+    await user.type(field, '0.82');
+
+    rerender(
+      <ConfigurationView
+        config={{ ...configFixture, conviction_threshold: 0.75 }}
+        onSave={onSave}
+      />,
+    );
+    expect(screen.getByText(warning)).toBeVisible();
+
+    rerender(
+      <ConfigurationView config={configFixture} onSave={onSave} />,
+    );
+
+    await waitFor(() => expect(screen.queryByText(warning)).not.toBeInTheDocument());
+    expect(field).toHaveValue(0.82);
   });
 
   it('submits the dirty draft and gives a truthful general backend next step', async () => {
@@ -117,6 +145,39 @@ describe('ConfigurationView', () => {
     ]) {
       expect(screen.getByRole('heading', { name })).toBeVisible();
     }
+  });
+
+  it('locks every editable control while a save is pending', async () => {
+    const user = userEvent.setup();
+    const saved = { ...configFixture, conviction_threshold: 0.82 };
+    let resolveSave!: (result: { ok: true; data: typeof saved }) => void;
+    const onSave = vi.fn(() => new Promise<{ ok: true; data: typeof saved }>((resolve) => {
+      resolveSave = resolve;
+    }));
+    render(<ConfigurationView config={configFixture} onSave={onSave} />);
+    const field = screen.getByLabelText('Confidence threshold');
+    const saveButton = screen.getByRole('button', { name: 'Save configuration' });
+    await user.clear(field);
+    await user.type(field, '0.82');
+    await user.click(saveButton);
+
+    await waitFor(() => expect(onSave).toHaveBeenCalledOnce());
+    const controls = screen.getByRole('main').querySelectorAll(
+      'input, select, button',
+    );
+    expect(controls.length).toBeGreaterThan(0);
+    for (const control of controls) expect(control).toBeDisabled();
+
+    await user.click(field);
+    await user.keyboard('9');
+    await user.click(saveButton);
+    expect(field).toHaveValue(0.82);
+    expect(onSave).toHaveBeenCalledOnce();
+
+    await act(async () => resolveSave({ ok: true, data: saved }));
+    expect(await screen.findByRole('status')).toHaveTextContent(
+      'Configuration saved.',
+    );
   });
 
   it('announces a successful save politely', async () => {

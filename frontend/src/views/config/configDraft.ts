@@ -242,12 +242,12 @@ export function configDraftReducer(
   action: ConfigDraftAction,
 ): ConfigDraftState {
   if (action.type === 'serverReceived') {
-    if (
-      equalConfig(action.config, state.baseline)
-      || equalConfig(action.config, state.incoming)
-    ) {
-      return state;
+    if (equalConfig(action.config, state.baseline)) {
+      return state.incoming === null
+        ? state
+        : { ...state, incoming: null };
     }
+    if (equalConfig(action.config, state.incoming)) return state;
     const protectedDraft =
       state.phase === 'dirty'
       || state.phase === 'saving'

@@ -48,6 +48,25 @@ describe('configDraftReducer', () => {
     expect(next.incoming?.conviction_threshold).toBe(0.75);
   });
 
+  it('clears a pending server update when polling returns to the baseline', () => {
+    const dirty = configDraftReducer(createConfigDraftState(configFixture), {
+      type: 'patch',
+      patch: { conviction_threshold: '0.82' },
+    });
+    const withIncoming = configDraftReducer(dirty, {
+      type: 'serverReceived',
+      config: { ...configFixture, conviction_threshold: 0.75 },
+    });
+    const returnedToBaseline = configDraftReducer(withIncoming, {
+      type: 'serverReceived',
+      config: configFixture,
+    });
+
+    expect(returnedToBaseline.draft?.conviction_threshold).toBe('0.82');
+    expect(returnedToBaseline.phase).toBe('dirty');
+    expect(returnedToBaseline.incoming).toBeNull();
+  });
+
   it('discards local edits into the newest server version', () => {
     const dirty = configDraftReducer(createConfigDraftState(configFixture), {
       type: 'patch',
