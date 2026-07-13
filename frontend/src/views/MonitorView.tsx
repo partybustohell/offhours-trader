@@ -53,26 +53,46 @@ function accountRows(
   positions: PositionsResponse,
   config: Config | null,
 ) {
-  const exposure = positions.positions.reduce(
-    (total, position) => total + Math.abs(position.marketValue),
-    0,
+  const marketValuesRecorded = positions.positions.every((position) =>
+    Number.isFinite(position.marketValue),
   );
-  const pnl = positions.positions.reduce(
-    (total, position) => total + position.unrealizedPl,
-    0,
+  const pnlValuesRecorded = positions.positions.every((position) =>
+    Number.isFinite(position.unrealizedPl),
   );
+  const exposure = marketValuesRecorded
+    ? positions.positions.reduce(
+        (total, position) => total + Math.abs(position.marketValue),
+        0,
+      )
+    : null;
+  const pnl = pnlValuesRecorded
+    ? positions.positions.reduce(
+        (total, position) => total + position.unrealizedPl,
+        0,
+      )
+    : null;
   const brokerDataAvailable = !positions.error;
   const halt = status?.halt;
   return [
     ['Account value', formatUsd(status?.equity), undefined],
-    ['Open exposure', brokerDataAvailable ? formatUsd(exposure) : 'Not available', undefined],
+    [
+      'Open exposure',
+      brokerDataAvailable && exposure !== null ? formatUsd(exposure) : 'Not available',
+      undefined,
+    ],
     ['Open positions', brokerDataAvailable ? String(positions.positions.length) : 'Not available', undefined],
     [
       'Open gain/loss',
-      brokerDataAvailable ? (pnl >= 0 ? '+' : '') + formatUsd(pnl) : 'Not available',
-      brokerDataAvailable
-        ? pnl >= 0 ? 'semantic-text--positive' : 'semantic-text--negative'
-        : undefined,
+      !brokerDataAvailable || pnl === null
+        ? 'Not available'
+        : pnl > 0
+          ? '+' + formatUsd(pnl)
+          : formatUsd(pnl),
+      !brokerDataAvailable || pnl === null || pnl === 0
+        ? undefined
+        : pnl > 0
+          ? 'semantic-text--positive'
+          : 'semantic-text--negative',
     ],
     ['Daily deployment used', 'Not available from current API', undefined],
     ['Daily deployment limit', formatPercent(config?.max_daily_deploy_pct), undefined],
@@ -92,10 +112,28 @@ function accountRows(
   ] as const;
 }
 
+function orderedAuditEvents(events: readonly AuditEvent[]) {
+  return events
+    .map((event, index) => ({
+      event,
+      index,
+      timestamp: Date.parse(event.ts),
+    }))
+    .sort((a, b) => {
+      const aRecorded = Number.isFinite(a.timestamp);
+      const bRecorded = Number.isFinite(b.timestamp);
+      if (aRecorded && bRecorded) {
+        return b.timestamp - a.timestamp || a.index - b.index;
+      }
+      if (aRecorded) return -1;
+      if (bRecorded) return 1;
+      return a.index - b.index;
+    });
+}
+
 function latestEvent(events: readonly AuditEvent[], kinds: readonly string[]): AuditEvent | null {
-  return [...events]
-    .filter((event) => kinds.includes(event.kind))
-    .sort((a, b) => Date.parse(b.ts) - Date.parse(a.ts))[0] ?? null;
+  const matching = events.filter((event) => kinds.includes(event.kind));
+  return orderedAuditEvents(matching)[0]?.event ?? null;
 }
 
 function planState(plan: Thesis | null, now: number): string {
@@ -326,22 +364,7 @@ function CandidateDetail({ row, plan }: { row: CandidateDecisionRow | null; plan
 function ActivityBlotter({ audit }: { audit: readonly AuditEvent[] }) {
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const rows = useMemo(
-    () => audit
-      .map((event, index) => ({
-        event,
-        index,
-        timestamp: Date.parse(event.ts),
-      }))
-      .sort((a, b) => {
-        const aRecorded = Number.isFinite(a.timestamp);
-        const bRecorded = Number.isFinite(b.timestamp);
-        if (aRecorded && bRecorded) {
-          return b.timestamp - a.timestamp || a.index - b.index;
-        }
-        if (aRecorded) return -1;
-        if (bRecorded) return 1;
-        return a.index - b.index;
-      })
+    () => orderedAuditEvents(audit)
       .slice(0, 20)
       .map(({ event, index }) => presentAuditEvent(event, index)),
     [audit],
@@ -404,7 +427,7 @@ export function MonitorView(props: MonitorViewProps) {
     {
       id: 'agreement',
       header: 'Agreement',
-      cell: (row) => String(row.agreeing) + ' / ' + (row.requiredAgreeing ?? '—'),
+      cell: (row) => String(row.agreeing) + ' / ' + (row.requiredAgreeing ?? 'Not recorded'),
       align: 'right',
       mobilePriority: 'secondary',
     },

@@ -58,9 +58,15 @@ describe('MonitorView', () => {
       <MonitorView {...props} positions={{ positions: [] }} />,
     );
 
-    expect(screen.getByText('Open exposure').nextElementSibling).toHaveTextContent('$0.00');
-    expect(screen.getByText('Open positions').nextElementSibling).toHaveTextContent('0');
-    expect(screen.getByText('Open gain/loss').nextElementSibling).toHaveTextContent('+$0.00');
+    expect(screen.getByText('Open exposure').nextElementSibling).toHaveTextContent(/^\$0\.00$/);
+    expect(screen.getByText('Open positions').nextElementSibling).toHaveTextContent(/^0$/);
+    expect(screen.getByText('Open gain/loss').nextElementSibling).toHaveTextContent(/^\$0\.00$/);
+    expect(screen.getByText('Open gain/loss').nextElementSibling).not.toHaveClass(
+      'semantic-text--positive',
+    );
+    expect(screen.getByText('Open gain/loss').nextElementSibling).not.toHaveClass(
+      'semantic-text--negative',
+    );
 
     rerender(
       <MonitorView
@@ -69,11 +75,78 @@ describe('MonitorView', () => {
       />,
     );
 
-    expect(screen.getByText('Open exposure').nextElementSibling).toHaveTextContent('Not available');
-    expect(screen.getByText('Open positions').nextElementSibling).toHaveTextContent('Not available');
-    expect(screen.getByText('Open gain/loss').nextElementSibling).toHaveTextContent('Not available');
+    expect(screen.getByText('Open exposure').nextElementSibling).toHaveTextContent(/^Not available$/);
+    expect(screen.getByText('Open positions').nextElementSibling).toHaveTextContent(/^Not available$/);
+    expect(screen.getByText('Open gain/loss').nextElementSibling).toHaveTextContent(/^Not available$/);
     expect(screen.getByText('Open gain/loss').nextElementSibling).not.toHaveClass(
       'semantic-text--positive',
+    );
+    expect(screen.getByText('Open gain/loss').nextElementSibling).not.toHaveClass(
+      'semantic-text--negative',
+    );
+  });
+
+  it('uses signed semantic tones for positive and negative open gain/loss', () => {
+    const { rerender } = render(<MonitorView {...props} />);
+
+    expect(screen.getByText('Open gain/loss').nextElementSibling).toHaveTextContent(/^\+\$88\.00$/);
+    expect(screen.getByText('Open gain/loss').nextElementSibling).toHaveClass(
+      'semantic-text--positive',
+    );
+    expect(screen.getByText('Open gain/loss').nextElementSibling).not.toHaveClass(
+      'semantic-text--negative',
+    );
+
+    rerender(
+      <MonitorView
+        {...props}
+        positions={{
+          positions: positionsFixture.positions.map((position) => ({
+            ...position,
+            unrealizedPl: -88,
+          })),
+        }}
+      />,
+    );
+
+    expect(screen.getByText('Open gain/loss').nextElementSibling).toHaveTextContent(/^-\$88\.00$/);
+    expect(screen.getByText('Open gain/loss').nextElementSibling).toHaveClass(
+      'semantic-text--negative',
+    );
+    expect(screen.getByText('Open gain/loss').nextElementSibling).not.toHaveClass(
+      'semantic-text--positive',
+    );
+  });
+
+  it('does not aggregate any non-finite position value', () => {
+    render(
+      <MonitorView
+        {...props}
+        positions={{
+          positions: [
+            ...positionsFixture.positions,
+            {
+              ...positionsFixture.positions[0],
+              ticker: 'WBD',
+              marketValue: Number.NaN,
+              unrealizedPl: Number.POSITIVE_INFINITY,
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByText('Open positions').nextElementSibling).toHaveTextContent(/^2$/);
+    expect(screen.getByText('Open exposure').nextElementSibling).toHaveTextContent(
+      /^Not available$/,
+    );
+    expect(screen.getByText('Open gain/loss').nextElementSibling).toHaveTextContent(
+      /^Not available$/,
+    );
+    expect(screen.getByText('Open gain/loss').nextElementSibling).not.toHaveClass(
+      'semantic-text--positive',
+    );
+    expect(screen.getByText('Open gain/loss').nextElementSibling).not.toHaveClass(
       'semantic-text--negative',
     );
   });
@@ -84,6 +157,8 @@ describe('MonitorView', () => {
     expect(screen.getByText('Risk halt').nextElementSibling).toHaveTextContent('Not available');
     expect(screen.getByText('Risk halt').nextElementSibling).not.toHaveClass(
       'semantic-text--positive',
+    );
+    expect(screen.getByText('Risk halt').nextElementSibling).not.toHaveClass(
       'semantic-text--negative',
     );
 
@@ -91,6 +166,8 @@ describe('MonitorView', () => {
     expect(screen.getByText('Risk halt').nextElementSibling).toHaveTextContent('Not available');
     expect(screen.getByText('Risk halt').nextElementSibling).not.toHaveClass(
       'semantic-text--positive',
+    );
+    expect(screen.getByText('Risk halt').nextElementSibling).not.toHaveClass(
       'semantic-text--negative',
     );
 
@@ -150,6 +227,56 @@ describe('MonitorView', () => {
 
     expect(screen.getByText('Last execution check').nextElementSibling).toHaveTextContent(
       'Execution check recorded. Not recorded',
+    );
+  });
+
+  it('uses the newest valid analysis timestamp ahead of invalid events', () => {
+    const audit = [
+      {
+        ts: 'invalid-analysis-first',
+        kind: 'thesis',
+        data: { reason: 'Invalid analysis timestamp' },
+      },
+      {
+        ts: '2026-07-13T12:20:00.000Z',
+        kind: 'candidates',
+        data: { reason: 'Older valid analysis' },
+      },
+      {
+        ts: '2026-07-13T12:30:00.000Z',
+        kind: 'thesis',
+        data: { reason: 'Newest valid analysis' },
+      },
+    ] satisfies AuditEvent[];
+    render(<MonitorView {...props} audit={audit} />);
+
+    expect(screen.getByText('Latest analysis').nextElementSibling).toHaveTextContent(
+      'Trading plan. Newest valid analysis. 08:30:00 ET',
+    );
+  });
+
+  it('uses the newest valid execution timestamp ahead of invalid events', () => {
+    const audit = [
+      {
+        ts: 'invalid-tick-first',
+        kind: 'tick',
+        data: { reason: 'Invalid execution timestamp' },
+      },
+      {
+        ts: '2026-07-13T12:10:00.000Z',
+        kind: 'tick',
+        data: { reason: 'Older valid execution' },
+      },
+      {
+        ts: '2026-07-13T12:40:00.000Z',
+        kind: 'tick',
+        data: { reason: 'Newest valid execution' },
+      },
+    ] satisfies AuditEvent[];
+    render(<MonitorView {...props} audit={audit} />);
+
+    expect(screen.getByText('Last execution check').nextElementSibling).toHaveTextContent(
+      'Execution check. Newest valid execution. 08:40:00 ET',
     );
   });
 
@@ -327,5 +454,15 @@ describe('MonitorView', () => {
       within(screen.getByRole('table', { name: 'Candidate monitor' }))
         .getAllByRole('columnheader'),
     ).toHaveLength(5);
+  });
+
+  it('states when required candidate agreement was not recorded', () => {
+    render(<MonitorView {...props} config={null} />);
+
+    expect(
+      within(screen.getByRole('row', { name: 'Inspect AMD' })).getByText(
+        '2 / Not recorded',
+      ),
+    ).toBeVisible();
   });
 });
