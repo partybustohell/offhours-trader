@@ -1,4 +1,46 @@
-import type { KeyboardEvent, ReactNode } from 'react';
+import type { KeyboardEvent, MouseEvent, ReactNode } from 'react';
+
+const INTERACTIVE_DESCENDANT_SELECTOR = [
+  'button',
+  'a',
+  'input',
+  'select',
+  'textarea',
+  'summary',
+  '[tabindex]',
+  '[contenteditable]:not([contenteditable="false"])',
+  '[role="button"]',
+  '[role="checkbox"]',
+  '[role="combobox"]',
+  '[role="link"]',
+  '[role="listbox"]',
+  '[role="menuitem"]',
+  '[role="menuitemcheckbox"]',
+  '[role="menuitemradio"]',
+  '[role="option"]',
+  '[role="radio"]',
+  '[role="scrollbar"]',
+  '[role="searchbox"]',
+  '[role="slider"]',
+  '[role="spinbutton"]',
+  '[role="switch"]',
+  '[role="tab"]',
+  '[role="textbox"]',
+  '[role="treeitem"]',
+].join(',');
+
+function isInteractiveDescendant(
+  row: HTMLTableRowElement,
+  target: EventTarget | null,
+) {
+  if (!(target instanceof Element)) return false;
+  const interactiveElement = target.closest(INTERACTIVE_DESCENDANT_SELECTOR);
+  return (
+    interactiveElement !== null &&
+    interactiveElement !== row &&
+    row.contains(interactiveElement)
+  );
+}
 
 export interface DataColumn<Row> {
   id: string;
@@ -41,8 +83,15 @@ export function DataTable<Row>({
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTableRowElement>, row: Row) => {
+    if (isInteractiveDescendant(event.currentTarget, event.target)) return;
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
+      activate(row);
+    }
+  };
+
+  const onClick = (event: MouseEvent<HTMLTableRowElement>, row: Row) => {
+    if (!isInteractiveDescendant(event.currentTarget, event.target)) {
       activate(row);
     }
   };
@@ -84,7 +133,7 @@ export function DataTable<Row>({
                   aria-label={rowLabel?.(row)}
                   aria-selected={onSelect ? selected : undefined}
                   aria-expanded={onToggleExpanded ? expanded : undefined}
-                  onClick={interactive ? () => activate(row) : undefined}
+                  onClick={interactive ? (event) => onClick(event, row) : undefined}
                   onKeyDown={
                     interactive ? (event) => onKeyDown(event, row) : undefined
                   }

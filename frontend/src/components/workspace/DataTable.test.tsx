@@ -76,4 +76,111 @@ describe('DataTable', () => {
     await userEvent.click(row);
     expect(onToggleExpanded).toHaveBeenCalledWith({ symbol: 'AMD', price: 172.4 });
   });
+
+  it('ignores clicks from native and custom interactive descendants', async () => {
+    const onSelect = vi.fn();
+    const onToggleExpanded = vi.fn();
+    const onButtonClick = vi.fn();
+    const interactiveColumns: DataColumn<Row>[] = [
+      columns[0],
+      {
+        id: 'actions',
+        header: 'Actions',
+        cell: () => (
+          <div>
+            <button type="button" onClick={onButtonClick}>
+              Native button
+            </button>
+            <a href="#details" onClick={(event) => event.preventDefault()}>
+              Native link
+            </a>
+            <input aria-label="Native input" />
+            <select aria-label="Native select">
+              <option>Only option</option>
+            </select>
+            <textarea aria-label="Native textarea" />
+            <details>
+              <summary>Native summary</summary>
+              Detail
+            </details>
+            <span role="button">Interactive role</span>
+            <span tabIndex={0}>Tabindex control</span>
+            <span contentEditable suppressContentEditableWarning>
+              Editable control
+            </span>
+          </div>
+        ),
+      },
+    ];
+
+    render(
+      <DataTable
+        ariaLabel="Orders"
+        rows={[{ symbol: 'AMD', price: 172.4 }]}
+        columns={interactiveColumns}
+        rowKey={(row) => row.symbol}
+        rowLabel={(row) => 'Inspect ' + row.symbol + ' order'}
+        emptyMessage="No orders were submitted today."
+        onSelect={onSelect}
+        onToggleExpanded={onToggleExpanded}
+      />,
+    );
+
+    const controls = [
+      screen.getByRole('button', { name: 'Native button' }),
+      screen.getByRole('link', { name: 'Native link' }),
+      screen.getByRole('textbox', { name: 'Native input' }),
+      screen.getByRole('combobox', { name: 'Native select' }),
+      screen.getByRole('textbox', { name: 'Native textarea' }),
+      screen.getByText('Native summary'),
+      screen.getByRole('button', { name: 'Interactive role' }),
+      screen.getByText('Tabindex control'),
+      screen.getByText('Editable control'),
+    ];
+    for (const control of controls) await userEvent.click(control);
+
+    expect(onButtonClick).toHaveBeenCalledOnce();
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(onToggleExpanded).not.toHaveBeenCalled();
+  });
+
+  it('ignores Enter and Space from an interactive descendant', async () => {
+    const onSelect = vi.fn();
+    const onToggleExpanded = vi.fn();
+    const onButtonClick = vi.fn();
+    const interactiveColumns: DataColumn<Row>[] = [
+      columns[0],
+      {
+        id: 'action',
+        header: 'Action',
+        cell: () => (
+          <button type="button" onClick={onButtonClick}>
+            Inspect evidence
+          </button>
+        ),
+      },
+    ];
+
+    render(
+      <DataTable
+        ariaLabel="Orders"
+        rows={[{ symbol: 'AMD', price: 172.4 }]}
+        columns={interactiveColumns}
+        rowKey={(row) => row.symbol}
+        rowLabel={(row) => 'Inspect ' + row.symbol + ' order'}
+        emptyMessage="No orders were submitted today."
+        onSelect={onSelect}
+        onToggleExpanded={onToggleExpanded}
+      />,
+    );
+
+    const button = screen.getByRole('button', { name: 'Inspect evidence' });
+    button.focus();
+    await userEvent.keyboard('{Enter}');
+    await userEvent.keyboard(' ');
+
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(onToggleExpanded).not.toHaveBeenCalled();
+    expect(onButtonClick).toHaveBeenCalledTimes(2);
+  });
 });

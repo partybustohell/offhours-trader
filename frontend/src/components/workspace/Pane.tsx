@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import type { KeyboardEvent, ReactNode } from 'react';
 
 export interface PaneTab {
   id: string;
@@ -35,6 +35,34 @@ export function Pane({
   const headingId = id + '-title';
   const panelId = id + '-panel';
 
+  const onTabKeyDown = (
+    event: KeyboardEvent<HTMLButtonElement>,
+    index: number,
+  ) => {
+    if (!tabs || tabs.length === 0) return;
+
+    let nextIndex: number;
+    if (event.key === 'ArrowLeft') {
+      nextIndex = (index - 1 + tabs.length) % tabs.length;
+    } else if (event.key === 'ArrowRight') {
+      nextIndex = (index + 1) % tabs.length;
+    } else if (event.key === 'Home') {
+      nextIndex = 0;
+    } else if (event.key === 'End') {
+      nextIndex = tabs.length - 1;
+    } else {
+      return;
+    }
+
+    event.preventDefault();
+    const tabButtons = event.currentTarget.parentElement?.querySelectorAll(
+      '[role="tab"]',
+    );
+    const nextButton = tabButtons?.item(nextIndex);
+    if (nextButton instanceof HTMLElement) nextButton.focus();
+    if (nextIndex !== index) onTabChange?.(tabs[nextIndex].id);
+  };
+
   return (
     <section
       className={'pane ' + className}
@@ -50,7 +78,7 @@ export function Pane({
       </header>
       {tabs && tabs.length > 0 ? (
         <div className="pane__tabs" role="tablist" aria-label={title + ' views'}>
-          {tabs.map((tab) => {
+          {tabs.map((tab, index) => {
             const selected = tab.id === activeTab;
             return (
               <button
@@ -62,6 +90,7 @@ export function Pane({
                 aria-controls={panelId}
                 tabIndex={selected ? 0 : -1}
                 onClick={() => onTabChange?.(tab.id)}
+                onKeyDown={(event) => onTabKeyDown(event, index)}
               >
                 {tab.label}
               </button>
