@@ -136,7 +136,7 @@ export default function App() {
           {view === 'positions' && (
             <PositionsView positions={d.positions} orders={d.orders} audit={d.audit} />
           )}
-          {view === 'backtest' && <BacktestView d={d} />}
+          {view === 'backtest' && <BacktestView backtest={d.backtest} />}
           {view === 'config' && <ConfigView d={d} onSaved={refresh} />}
           {view === 'audit' && <AuditView d={d} />}
         </main>

@@ -1,193 +1,274 @@
-import { useState, type CSSProperties } from 'react';
-import type { AppData } from '../App';
-import type { BacktestCell } from '../types';
-import { fmtUsd } from '../api';
-import { Card, Empty } from '../ui';
+import { useState } from 'react';
+import { DataTable } from '../components/workspace/DataTable';
+import { Pane } from '../components/workspace/Pane';
+import { StatusMessage } from '../components/workspace/StatusMessage';
+import { buildBacktestPoints } from '../presentation/backtest';
+import {
+  formatEtTimestamp,
+  formatPercent,
+  formatUsd,
+  sentenceCase,
+} from '../presentation/format';
+import type { BacktestResponse, BacktestTrade } from '../types';
 
-// Aggregate the 3 bear-weight cells per threshold into one bar: the story is
-// P&L vs threshold, and bear weight barely moves it.
-function byThreshold(cells: BacktestCell[]): { threshold: number; pnl: number; trades: number }[] {
-  const m = new Map<number, { pnl: number; trades: number; n: number }>();
-  for (const c of cells) {
-    const g = m.get(c.threshold) ?? { pnl: 0, trades: 0, n: 0 };
-    g.pnl += c.netPnlUsd;
-    g.trades += c.trades;
-    g.n += 1;
-    m.set(c.threshold, g);
-  }
-  return [...m.entries()]
-    .map(([threshold, g]) => ({ threshold, pnl: g.pnl / g.n, trades: Math.round(g.trades / g.n) }))
-    .sort((a, b) => a.threshold - b.threshold);
+export interface BacktestViewProps {
+  backtest: BacktestResponse | null;
 }
 
-export default function BacktestView({ d }: { d: AppData }) {
-  const [openTrade, setOpenTrade] = useState<number | null>(null);
-  const bt = d.backtest;
+interface IndexedTrade {
+  trade: BacktestTrade;
+  sourceIndex: number;
+}
 
-  if (!bt?.available) {
+function recordedText(value: string | null | undefined): string {
+  const text = value?.trim();
+  return text ? text : 'Not recorded';
+}
+
+function pnlText(value: number) {
+  const recorded = Number.isFinite(value);
+  const className = !recorded || value === 0
+    ? undefined
+    : value > 0
+      ? 'semantic-text--positive'
+      : 'semantic-text--negative';
+  const text = recorded && value > 0 ? '+' + formatUsd(value) : formatUsd(value);
+  return <span className={className}>{text}</span>;
+}
+
+function PnlChart({ backtest }: { backtest: BacktestResponse }) {
+  const points = buildBacktestPoints(backtest.cells ?? []);
+  if (points.length === 0) {
     return (
-      <div className="stagger">
-        <div className="view-head" style={{ ['--i' as string]: 0 }}>
-          <h1 className="view-title">Backtest</h1>
-        </div>
-        <Card>
-          <Empty>No backtest results yet — run scripts/backtest.ts.</Empty>
-        </Card>
-      </div>
+      <StatusMessage tone="empty">
+        No threshold cells were returned.
+      </StatusMessage>
     );
   }
 
-  const cells = bt.cells ?? [];
-  const trades = bt.trades ?? [];
-  const bars = byThreshold(cells);
-  const maxAbs = Math.max(1, ...bars.map((b) => Math.abs(b.pnl)));
+  const width = 720;
+  const height = 260;
+  const padding = 32;
+  const pnls = points.map((point) => point.pnl);
+  const minPnl = Math.min(0, ...pnls);
+  const maxPnl = Math.max(0, ...pnls);
+  const pnlRange = Math.max(1, maxPnl - minPnl);
+  const thresholds = points.map((point) => point.threshold);
+  const minThreshold = Math.min(...thresholds);
+  const maxThreshold = Math.max(...thresholds);
+  const thresholdRange = maxThreshold - minThreshold;
+  const coordinates = points.map((point) => {
+    const x = thresholdRange === 0
+      ? width / 2
+      : padding +
+        ((point.threshold - minThreshold) / thresholdRange) *
+          (width - padding * 2);
+    const y =
+      height -
+      padding -
+      ((point.pnl - minPnl) / pnlRange) * (height - padding * 2);
+    return { ...point, x, y };
+  });
+  const zeroY =
+    height -
+    padding -
+    ((0 - minPnl) / pnlRange) * (height - padding * 2);
 
   return (
-    <div className="stagger">
-      <div className="view-head" style={{ ['--i' as string]: 0 }}>
-        <h1 className="view-title">Backtest</h1>
-        <p className="view-desc">
-          50 episodes, Jan–Jun 2026, $50k. Sign is shown three ways — bar direction, colour, and the
-          value — so it reads without relying on red/green.
-        </p>
-        <span className="view-tag">{bt.tag}</span>
-      </div>
-
-      <Card
-        title="Net P&L by conviction threshold"
-        sub="mean per cell · SIP realism"
-        style={{ ['--i' as string]: 1 } as CSSProperties}
+    <figure className="backtest-chart">
+      <svg
+        viewBox={'0 0 ' + width + ' ' + height}
+        role="img"
+        aria-label="Net P&L by confidence threshold"
       >
-        <div className="pnl-chart">
-          {bars.map((b) => {
-            const h = (Math.abs(b.pnl) / maxAbs) * 50;
-            const pos = b.pnl >= 0;
-            return (
-              <div className="pnl-col" key={b.threshold} title={`${b.trades} trades`}>
-                <div className="pnl-plot">
-                  <div className="pnl-zero" />
-                  <div
-                    className={`pnl-bar ${pos ? 'pos' : 'neg'}`}
-                    style={{ height: `${h}%` }}
-                  />
-                  <div
-                    className={`pnl-val ${pos ? 'pos' : 'neg'}`}
-                    style={pos ? { bottom: `calc(50% + ${h}% + 4px)` } : { top: `calc(50% + ${h}% + 4px)` }}
-                  >
-                    {b.pnl >= 0 ? '+' : ''}
-                    {b.pnl.toFixed(0)}
-                  </div>
-                </div>
-                <div className="pnl-x">
-                  {b.threshold.toFixed(2)}
-                  <small>{b.trades} trd</small>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-        <p className="note" style={{ marginTop: 12 }}>
-          P&L is statistically indistinguishable from zero at every threshold (n ≤ 14) — descriptive
-          only, no edge claimed.
-        </p>
-      </Card>
-
-      <div className="section-gap">
-        <Card title="Sweep" sub={`${cells.length} cells`} flush>
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Cell</th>
-                  <th className="r">Thr</th>
-                  <th className="r">Bear</th>
-                  <th className="r">Abst</th>
-                  <th className="r">Filled</th>
-                  <th className="r">Trades</th>
-                  <th className="r">Net P&L</th>
-                </tr>
-              </thead>
-              <tbody>
-                {cells.map((c) => (
-                  <tr key={c.cell}>
-                    <td className="ticker">{c.cell}</td>
-                    <td className="r num">{c.threshold.toFixed(2)}</td>
-                    <td className="r num">{(c.bearWeight ?? c.bear ?? 0).toFixed(1)}</td>
-                    <td className="r num">{c.abstained}/50</td>
-                    <td className="r num">
-                      {c.ordersFilled}/{c.ordersPlaced}
-                    </td>
-                    <td className="r num">{c.trades}</td>
-                    <td className={`r num ${c.netPnlUsd >= 0 ? 'pos' : c.netPnlUsd < 0 ? 'neg' : ''}`}>
-                      {fmtUsd(c.netPnlUsd)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-      </div>
-
-      <div className="section-gap">
-        <Card title="Trade log" sub={bt.tradeLogCell ?? undefined} flush>
-          {trades.length === 0 ? (
-            <div style={{ padding: 16 }}>
-              <Empty>No trades in any cell.</Empty>
-            </div>
-          ) : (
-            <div className="table-wrap">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Day</th>
-                    <th>Ticker</th>
-                    <th>Side</th>
-                    <th className="r">Qty</th>
-                    <th className="r">Entry → Exit</th>
-                    <th className="r">P&L</th>
-                    <th>Exit</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {trades.map((t, i) => {
-                    const reason = t.exitReason || '?';
-                    return (
-                      <tr key={i}>
-                        <td className="num">
-                          {t.day} <span className="tag">{t.stratum}</span>
-                        </td>
-                        <td className="ticker">{t.ticker}</td>
-                        <td>{t.side}</td>
-                        <td className="r num">{t.qty}</td>
-                        <td className="r num">
-                          {t.entryPrice.toFixed(2)} → {t.exitPrice.toFixed(2)}
-                        </td>
-                        <td className={`r num ${t.pnlUsd >= 0 ? 'pos' : 'neg'}`}>{fmtUsd(t.pnlUsd)}</td>
-                        <td>
-                          <button
-                            className="note"
-                            style={{ cursor: 'pointer', textAlign: 'left' }}
-                            title={reason}
-                            onClick={() => setOpenTrade(openTrade === i ? null : i)}
-                          >
-                            {reason.length > 24 ? `${reason.slice(0, 24)}…` : reason}
-                          </button>
-                          {openTrade === i ? (
-                            <div className="note" style={{ marginTop: 6, whiteSpace: 'normal', maxWidth: 340 }}>
-                              {reason}
-                            </div>
-                          ) : null}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </Card>
-      </div>
-    </div>
+        <line
+          x1={padding}
+          x2={width - padding}
+          y1={zeroY}
+          y2={zeroY}
+          className="chart-zero"
+        />
+        <polyline
+          points={coordinates
+            .map((point) => point.x + ',' + point.y)
+            .join(' ')}
+          className="chart-line"
+        />
+        {coordinates.map((point, index) => (
+          <circle
+            key={point.key + ':' + index}
+            cx={point.x}
+            cy={point.y}
+            r="3"
+          >
+            <title>
+              {formatPercent(point.threshold) + ': ' + formatUsd(point.pnl)}
+            </title>
+          </circle>
+        ))}
+      </svg>
+      <figcaption>
+        Net P&amp;L returned for each confidence threshold.
+      </figcaption>
+    </figure>
   );
 }
+
+export function BacktestView({ backtest }: BacktestViewProps) {
+  const [tab, setTab] = useState('pnl');
+
+  if (!backtest?.available) {
+    return (
+      <main className="route route--backtest">
+        <Pane id="backtest" title="Backtest">
+          <StatusMessage tone="empty">
+            No backtest result is available.
+          </StatusMessage>
+        </Pane>
+      </main>
+    );
+  }
+
+  const tradeRows: IndexedTrade[] = (backtest.trades ?? []).map(
+    (trade, sourceIndex) => ({ trade, sourceIndex }),
+  );
+
+  return (
+    <main className="route route--backtest">
+      <Pane
+        id="backtest"
+        title="Backtest"
+        subtitle={recordedText(backtest.tag)}
+        toolbar={
+          backtest.generatedAt ? (
+            <span>Generated {formatEtTimestamp(backtest.generatedAt)}</span>
+          ) : null
+        }
+        tabs={[
+          { id: 'pnl', label: 'P&L by threshold' },
+          { id: 'sweep', label: 'Sweep' },
+          { id: 'trades', label: 'Trade log' },
+        ]}
+        activeTab={tab}
+        onTabChange={setTab}
+      >
+        {tab === 'pnl' ? <PnlChart backtest={backtest} /> : null}
+        {tab === 'sweep' ? (
+          <DataTable
+            ariaLabel="Backtest sweep"
+            rows={backtest.cells ?? []}
+            columns={[
+              {
+                id: 'cell',
+                header: 'Cell',
+                cell: (row) => recordedText(row.cell),
+              },
+              {
+                id: 'threshold',
+                header: 'Confidence threshold',
+                cell: (row) => formatPercent(row.threshold),
+                align: 'right',
+              },
+              {
+                id: 'abstained',
+                header: 'Abstained',
+                cell: (row) => row.abstained,
+                align: 'right',
+              },
+              {
+                id: 'placed',
+                header: 'Orders placed',
+                cell: (row) => row.ordersPlaced,
+                align: 'right',
+              },
+              {
+                id: 'filled',
+                header: 'Orders filled',
+                cell: (row) => row.ordersFilled,
+                align: 'right',
+              },
+              {
+                id: 'trades',
+                header: 'Trades',
+                cell: (row) => row.trades,
+                align: 'right',
+              },
+              {
+                id: 'pnl',
+                header: 'Net P&L',
+                cell: (row) => pnlText(row.netPnlUsd),
+                align: 'right',
+              },
+            ]}
+            rowKey={(row) => row.cell}
+            emptyMessage="No threshold cells were returned."
+          />
+        ) : null}
+        {tab === 'trades' ? (
+          <div className="detail-stack">
+            <p>Trade-log cell: {recordedText(backtest.tradeLogCell)}</p>
+            <DataTable
+              ariaLabel="Backtest trade log"
+              rows={tradeRows}
+              columns={[
+                {
+                  id: 'day',
+                  header: 'Day',
+                  cell: (row) => recordedText(row.trade.day),
+                },
+                {
+                  id: 'stratum',
+                  header: 'Stratum',
+                  cell: (row) => recordedText(row.trade.stratum),
+                },
+                {
+                  id: 'symbol',
+                  header: 'Symbol',
+                  cell: (row) => recordedText(row.trade.ticker),
+                },
+                {
+                  id: 'side',
+                  header: 'Side',
+                  cell: (row) => sentenceCase(row.trade.side),
+                },
+                {
+                  id: 'quantity',
+                  header: 'Quantity',
+                  cell: (row) => row.trade.qty,
+                  align: 'right',
+                },
+                {
+                  id: 'entry',
+                  header: 'Entry',
+                  cell: (row) => formatUsd(row.trade.entryPrice),
+                  align: 'right',
+                },
+                {
+                  id: 'exit',
+                  header: 'Exit',
+                  cell: (row) => formatUsd(row.trade.exitPrice),
+                  align: 'right',
+                },
+                {
+                  id: 'pnl',
+                  header: 'P&L',
+                  cell: (row) => pnlText(row.trade.pnlUsd),
+                  align: 'right',
+                },
+                {
+                  id: 'reason',
+                  header: 'Exit reason',
+                  cell: (row) => sentenceCase(row.trade.exitReason),
+                },
+              ]}
+              rowKey={(row) => String(row.sourceIndex)}
+              emptyMessage="No trades were returned for the selected cell."
+            />
+          </div>
+        ) : null}
+      </Pane>
+    </main>
+  );
+}
+
+export default BacktestView;
