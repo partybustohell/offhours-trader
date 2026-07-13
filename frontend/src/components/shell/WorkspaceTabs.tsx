@@ -16,6 +16,7 @@ export function WorkspaceTabs({
 }: WorkspaceTabsProps) {
   const [moreOpen, setMoreOpen] = useState(false);
   const moreButton = useRef<HTMLButtonElement>(null);
+  const morePanel = useRef<HTMLDivElement>(null);
   const firstSecondary = useRef<HTMLAnchorElement>(null);
   const primaryRoutes = routes.filter((route) => route.mobile === 'primary');
   const secondaryRoutes = routes.filter((route) => route.mobile === 'more');
@@ -28,11 +29,19 @@ export function WorkspaceTabs({
   }, [moreOpen]);
 
   useEffect(() => {
+    const restoreFocus = moreOpen
+      && morePanel.current?.contains(document.activeElement) === true;
     setMoreOpen(false);
+    if (restoreFocus) {
+      window.setTimeout(() => moreButton.current?.focus(), 0);
+    }
   }, [activeView]);
 
-  const navigate = (view: ViewId) => {
+  const navigate = (view: ViewId, restoreMoreFocus = false) => {
     setMoreOpen(false);
+    if (restoreMoreFocus) {
+      window.setTimeout(() => moreButton.current?.focus(), 0);
+    }
     onNavigate(view);
   };
 
@@ -95,7 +104,7 @@ export function WorkspaceTabs({
           More
         </button>
         {moreOpen ? (
-          <div id={moreRoutesId} className="mobile-navigation__more">
+          <div ref={morePanel} id={moreRoutesId} className="mobile-navigation__more">
             {secondaryRoutes.map((route, index) => (
               <a
                 key={route.id}
@@ -104,7 +113,7 @@ export function WorkspaceTabs({
                 aria-current={route.id === activeView ? 'page' : undefined}
                 onClick={(event) => {
                   event.preventDefault();
-                  navigate(route.id);
+                  navigate(route.id, true);
                 }}
               >
                 {route.label}

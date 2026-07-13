@@ -60,6 +60,7 @@ export function MobileControlSheet({
   onClose,
 }: MobileControlSheetProps) {
   const panelRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -111,7 +112,7 @@ export function MobileControlSheet({
       <div className="control-sheet__surface">
         <header>
           <h2 id="control-sheet-title">Trading controls</h2>
-          <button type="button" onClick={close}>Close</button>
+          <button ref={closeButtonRef} type="button" onClick={close}>Close</button>
         </header>
         <dl className="definition-rows">
           <div><dt>Mode</dt><dd>{modeText(mode)}</dd></div>
@@ -144,6 +145,7 @@ export function MobileControlSheet({
               body: 'New entries will remain blocked until trading is resumed.',
               confirmLabel: 'Halt trading',
             }}
+            confirmationPendingFocusRef={closeButtonRef}
             showResult={false}
             onInvoke={onAction}
           />

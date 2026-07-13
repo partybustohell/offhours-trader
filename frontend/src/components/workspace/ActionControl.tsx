@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
 import type { ActionState, OperatorAction } from '../../app/operatorState';
 
 function punctuate(message: string): string {
@@ -38,6 +38,7 @@ export interface ActionControlProps {
   };
   disabled?: boolean;
   showResult?: boolean;
+  confirmationPendingFocusRef?: RefObject<HTMLElement | null>;
   onInvoke(action: OperatorAction): Promise<void>;
 }
 
@@ -49,6 +50,7 @@ export function ActionControl({
   confirmation,
   disabled = false,
   showResult = true,
+  confirmationPendingFocusRef,
   onInvoke,
 }: ActionControlProps) {
   const [confirming, setConfirming] = useState(false);
@@ -87,6 +89,7 @@ export function ActionControl({
   const invoke = async () => {
     if (inFlightRef.current) return;
     inFlightRef.current = true;
+    if (confirming) confirmationPendingFocusRef?.current?.focus();
     setConfirming(false);
     setLocalPending(true);
     setLocalError(null);

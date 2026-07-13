@@ -1,7 +1,8 @@
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { ROUTES } from '../../router';
+import { ROUTES, type ViewId } from '../../router';
 import { WorkspaceTabs } from './WorkspaceTabs';
 
 describe('WorkspaceTabs', () => {
@@ -90,9 +91,22 @@ describe('WorkspaceTabs', () => {
   it('reaches a secondary route and closes the disclosure after navigation', async () => {
     const user = userEvent.setup();
     const onNavigate = vi.fn();
-    render(
-      <WorkspaceTabs routes={ROUTES} activeView="overview" onNavigate={onNavigate} />,
-    );
+
+    function Harness() {
+      const [activeView, setActiveView] = useState<ViewId>('overview');
+      return (
+        <WorkspaceTabs
+          routes={ROUTES}
+          activeView={activeView}
+          onNavigate={(next) => {
+            onNavigate(next);
+            setActiveView(next);
+          }}
+        />
+      );
+    }
+
+    render(<Harness />);
     const mobile = screen.getByRole('navigation', { name: 'Mobile workspace routes' });
     const more = within(mobile).getByRole('button', { name: 'More routes' });
     await user.click(more);
@@ -100,8 +114,12 @@ describe('WorkspaceTabs', () => {
     await user.click(within(mobile).getByRole('link', { name: 'Audit' }));
 
     expect(onNavigate).toHaveBeenCalledWith('audit');
-    expect(more).toHaveAttribute('aria-expanded', 'false');
+    const currentMore = within(mobile).getByRole('button', {
+      name: 'More routes, current route Audit',
+    });
+    expect(currentMore).toHaveAttribute('aria-expanded', 'false');
     expect(within(mobile).queryByRole('link', { name: 'Audit' })).not.toBeInTheDocument();
+    await waitFor(() => expect(currentMore).toHaveFocus());
   });
 
   it('closes an open disclosure when navigation happens elsewhere', async () => {
@@ -118,5 +136,8 @@ describe('WorkspaceTabs', () => {
     expect(within(mobile).getByRole('button', { name: 'More routes' }))
       .toHaveAttribute('aria-expanded', 'false');
     expect(within(mobile).queryByRole('link', { name: 'Backtest' })).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(within(mobile).getByRole('button', { name: 'More routes' })).toHaveFocus();
+    });
   });
 });
