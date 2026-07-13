@@ -11,7 +11,9 @@ const focusableSelector = [
 ].join(',');
 
 function fallbackFocusTarget(master: HTMLElement): HTMLElement | null {
-  const selected = master.querySelector<HTMLElement>('[aria-selected="true"]');
+  const selected = master.querySelector<HTMLElement>(
+    '[role="row"][aria-selected="true"]',
+  );
   if (selected && selected.matches(focusableSelector)) return selected;
   return master.querySelector<HTMLElement>(focusableSelector);
 }
@@ -35,6 +37,7 @@ export function MasterDetail({
 }: MasterDetailProps) {
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
   const masterRef = useRef<HTMLDivElement>(null);
+  const detailRef = useRef<HTMLDivElement>(null);
   const backRef = useRef<HTMLButtonElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const previousDetailOpenRef = useRef(detailOpen);
@@ -46,26 +49,48 @@ export function MasterDetail({
   }, []);
 
   const mobile = viewportWidth < mobileDetailBreakpoint;
+  const previousMobileRef = useRef(mobile);
 
   useLayoutEffect(() => {
     const wasOpen = previousDetailOpenRef.current;
+    const wasMobile = previousMobileRef.current;
     previousDetailOpenRef.current = detailOpen;
-    if (!mobile || wasOpen === detailOpen) return;
+    previousMobileRef.current = mobile;
+    if (!mobile) return;
+
+    const master = masterRef.current;
+    const restoreMasterFocus = () => {
+      if (!master) return;
+      const retained = returnFocusRef.current;
+      const target =
+        retained && retained.isConnected && master.contains(retained)
+          ? retained
+          : fallbackFocusTarget(master);
+      target?.focus();
+      returnFocusRef.current = null;
+    };
+
+    if (!wasMobile && wasOpen === detailOpen) {
+      const active = document.activeElement;
+      if (!(active instanceof HTMLElement)) return;
+
+      if (detailOpen && master?.contains(active)) {
+        returnFocusRef.current = active;
+        backRef.current?.focus();
+      } else if (!detailOpen && detailRef.current?.contains(active)) {
+        restoreMasterFocus();
+      }
+      return;
+    }
+
+    if (wasOpen === detailOpen) return;
 
     if (detailOpen) {
       backRef.current?.focus();
       return;
     }
 
-    const master = masterRef.current;
-    if (!master) return;
-    const retained = returnFocusRef.current;
-    const target =
-      retained && retained.isConnected && master.contains(retained)
-        ? retained
-        : fallbackFocusTarget(master);
-    target?.focus();
-    returnFocusRef.current = null;
+    restoreMasterFocus();
   }, [detailOpen, mobile]);
 
   return (
@@ -83,6 +108,7 @@ export function MasterDetail({
         {master}
       </div>
       <div
+        ref={detailRef}
         className="master-detail__detail"
         role="group"
         aria-label={detailLabel}

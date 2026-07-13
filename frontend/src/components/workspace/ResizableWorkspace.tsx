@@ -50,7 +50,9 @@ function fallbackFocusTarget(
   panes: readonly (HTMLElement | null)[],
 ): HTMLElement | null {
   for (const pane of panes) {
-    const selected = pane?.querySelector<HTMLElement>('[aria-selected="true"]');
+    const selected = pane?.querySelector<HTMLElement>(
+      '[role="row"][aria-selected="true"]',
+    );
     if (selected && selected.matches(focusableSelector)) return selected;
   }
   for (const pane of panes) {
@@ -124,6 +126,7 @@ export function ResizableWorkspace({
   } | null>(null);
   const leftRef = useRef<HTMLDivElement>(null);
   const centerRef = useRef<HTMLDivElement>(null);
+  const rightRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const backRef = useRef<HTMLButtonElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
@@ -137,6 +140,7 @@ export function ResizableWorkspace({
 
   const wide = viewportWidth >= wideWorkspaceMin;
   const mobile = viewportWidth < mobileDetailBreakpoint;
+  const previousMobileRef = useRef(mobile);
   const effective = useMemo(
     () => fitWidths(viewportWidth, desired, constraints),
     [constraints, desired, viewportWidth],
@@ -144,23 +148,44 @@ export function ResizableWorkspace({
 
   useLayoutEffect(() => {
     const wasOpen = previousDetailOpenRef.current;
+    const wasMobile = previousMobileRef.current;
     previousDetailOpenRef.current = detailOpen;
-    if (!mobile || wasOpen === detailOpen) return;
+    previousMobileRef.current = mobile;
+    if (!mobile) return;
+
+    const panes = [centerRef.current, leftRef.current, bottomRef.current] as const;
+    const restoreMasterFocus = () => {
+      const retained = returnFocusRef.current;
+      const retainedPane = panes.find((pane) => pane?.contains(retained));
+      const target =
+        retained && retained.isConnected && retainedPane
+          ? retained
+          : fallbackFocusTarget(panes);
+      target?.focus();
+      returnFocusRef.current = null;
+    };
+
+    if (!wasMobile && wasOpen === detailOpen) {
+      const active = document.activeElement;
+      if (!(active instanceof HTMLElement)) return;
+
+      if (detailOpen && panes.some((pane) => pane?.contains(active))) {
+        returnFocusRef.current = active;
+        backRef.current?.focus();
+      } else if (!detailOpen && rightRef.current?.contains(active)) {
+        restoreMasterFocus();
+      }
+      return;
+    }
+
+    if (wasOpen === detailOpen) return;
 
     if (detailOpen) {
       backRef.current?.focus();
       return;
     }
 
-    const panes = [centerRef.current, leftRef.current, bottomRef.current] as const;
-    const retained = returnFocusRef.current;
-    const retainedPane = panes.find((pane) => pane?.contains(retained));
-    const target =
-      retained && retained.isConnected && retainedPane
-        ? retained
-        : fallbackFocusTarget(panes);
-    target?.focus();
-    returnFocusRef.current = null;
+    restoreMasterFocus();
   }, [detailOpen, mobile]);
 
   const captureMasterFocus = (target: EventTarget) => {
@@ -233,6 +258,7 @@ export function ResizableWorkspace({
           {center}
         </div>
         <div
+          ref={rightRef}
           className="resizable-workspace__right"
           role="group"
           aria-label={detailLabel}

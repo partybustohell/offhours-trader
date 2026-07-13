@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
@@ -79,7 +79,7 @@ describe('MasterDetail', () => {
   });
 
   it.each([
-    { withSelected: true, expected: 'Selected fallback' },
+    { withSelected: true, expected: 'Replacement row' },
     { withSelected: false, expected: 'First fallback' },
   ])(
     'uses $expected when the retained mobile source disconnects',
@@ -107,9 +107,14 @@ describe('MasterDetail', () => {
                 ) : null}
                 <button type="button">First fallback</button>
                 {withSelected ? (
-                  <div role="row" tabIndex={0} aria-selected="true">
-                    Selected fallback
-                  </div>
+                  <>
+                    <button type="button" role="tab" aria-selected="true">
+                      Selected tab
+                    </button>
+                    <div role="row" tabIndex={0} aria-selected="true">
+                      Replacement row
+                    </div>
+                  </>
                 ) : null}
               </>
             }
@@ -168,6 +173,59 @@ describe('MasterDetail', () => {
       />,
     );
     expect(back).toHaveFocus();
+  });
+
+  it('moves master focus to Back when an open detail crosses from 900px to 899px', () => {
+    setViewport(900, 700);
+    render(
+      <MasterDetail
+        master={<button type="button">Candidate rows</button>}
+        detail={<button type="button">Decision control</button>}
+        detailOpen
+        detailLabel="AMD candidate detail"
+        onDetailClose={vi.fn()}
+      />,
+    );
+    screen.getByRole('button', { name: 'Candidate rows' }).focus();
+
+    act(() => setViewport(899, 700));
+
+    const back = screen.getByRole('button', { name: 'Back to list' });
+    expect(back).toHaveFocus();
+
+    act(() => setViewport(900, 700));
+    expect(back).toHaveFocus();
+  });
+
+  it('moves detail focus to the selected data row when a closed detail crosses to 899px', () => {
+    setViewport(900, 700);
+    render(
+      <MasterDetail
+        master={
+          <>
+            <button type="button" role="tab" aria-selected="true">
+              Selected tab
+            </button>
+            <div role="row" tabIndex={0} aria-selected="true">
+              Selected data row
+            </div>
+          </>
+        }
+        detail={<button type="button">Decision control</button>}
+        detailOpen={false}
+        detailLabel="AMD candidate detail"
+        onDetailClose={vi.fn()}
+      />,
+    );
+    screen.getByRole('button', { name: 'Decision control' }).focus();
+
+    act(() => setViewport(899, 700));
+
+    const selectedRow = screen.getByRole('row', { name: 'Selected data row' });
+    expect(selectedRow).toHaveFocus();
+
+    act(() => setViewport(900, 700));
+    expect(selectedRow).toHaveFocus();
   });
 
   it('hides the inactive screen from accessibility and focus below 900px', () => {

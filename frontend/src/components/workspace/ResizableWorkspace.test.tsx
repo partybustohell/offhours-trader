@@ -1,4 +1,4 @@
-import { createEvent, fireEvent, render, screen } from '@testing-library/react';
+import { act, createEvent, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { describe, expect, it } from 'vitest';
@@ -191,8 +191,11 @@ describe('ResizableWorkspace', () => {
                 </button>
               ) : null}
               <button type="button">First center control</button>
+              <button type="button" role="tab" aria-selected="true">
+                Selected center tab
+              </button>
               <div role="row" tabIndex={0} aria-selected="true">
-                Selected center row
+                Replacement center row
               </div>
             </>
           }
@@ -209,7 +212,7 @@ describe('ResizableWorkspace', () => {
     expect(back).toHaveFocus();
     await user.click(back);
 
-    expect(screen.getByText('Selected center row')).toHaveFocus();
+    expect(screen.getByText('Replacement center row')).toHaveFocus();
   });
 
   it('does not move focus across compact detail transitions at 900px', () => {
@@ -232,6 +235,59 @@ describe('ResizableWorkspace', () => {
     back.focus();
     rerender(<ResizableWorkspace {...focusProps} detailOpen={false} />);
     expect(back).toHaveFocus();
+  });
+
+  it('moves center focus to Back when an open detail crosses from 900px to 899px', () => {
+    setViewport(900, 700);
+    render(
+      <ResizableWorkspace
+        {...props}
+        center={<button type="button">Candidate rows</button>}
+        right={<button type="button">Decision control</button>}
+        detailOpen
+      />,
+    );
+    screen.getByRole('button', { name: 'Candidate rows' }).focus();
+
+    act(() => setViewport(899, 700));
+
+    const back = screen.getByRole('button', { name: 'Back to list' });
+    expect(back).toHaveFocus();
+
+    act(() => setViewport(900, 700));
+    expect(back).toHaveFocus();
+  });
+
+  it('moves detail focus to the selected center row when a closed detail crosses to 899px', () => {
+    setViewport(900, 700);
+    render(
+      <ResizableWorkspace
+        {...props}
+        center={
+          <>
+            <button type="button" role="tab" aria-selected="true">
+              Selected center tab
+            </button>
+            <div role="row" tabIndex={0} aria-selected="true">
+              Selected center data row
+            </div>
+          </>
+        }
+        right={<button type="button">Decision control</button>}
+        detailOpen={false}
+      />,
+    );
+    screen.getByRole('button', { name: 'Decision control' }).focus();
+
+    act(() => setViewport(899, 700));
+
+    const selectedRow = screen.getByRole('row', {
+      name: 'Selected center data row',
+    });
+    expect(selectedRow).toHaveFocus();
+
+    act(() => setViewport(900, 700));
+    expect(selectedRow).toHaveFocus();
   });
 
   it.each([false, true])(
