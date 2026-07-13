@@ -138,7 +138,7 @@ export default function App() {
           )}
           {view === 'backtest' && <BacktestView backtest={d.backtest} />}
           {view === 'config' && <ConfigView d={d} onSaved={refresh} />}
-          {view === 'audit' && <AuditView d={d} />}
+          {view === 'audit' && <AuditView events={d.audit} />}
         </main>
       </div>
     </div>

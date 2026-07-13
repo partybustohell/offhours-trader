@@ -17,7 +17,7 @@ export interface PresentedAuditEvent {
   stage: string;
   status: ActivityStatus;
   description: string;
-  fields: readonly { label: string; value: string }[];
+  fields: readonly { key: string; label: string; value: string }[];
   rawJson: string;
   rawKind: string;
   knownKind: boolean;
@@ -91,6 +91,7 @@ export function presentAuditEvent(event: AuditEvent, index = 0): PresentedAuditE
     status: classify(event.kind, data),
     description: describe(event.kind, data),
     fields: Object.entries(data).map(([label, value]) => ({
+      key: label,
       label: sentenceCase(label),
       value: typeof value === 'string' ? value : JSON.stringify(value) ?? 'Not recorded',
     })),

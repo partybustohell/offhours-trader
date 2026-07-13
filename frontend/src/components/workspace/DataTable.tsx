@@ -1,4 +1,4 @@
-import type { KeyboardEvent, MouseEvent, ReactNode } from 'react';
+import { useId, type KeyboardEvent, type MouseEvent, type ReactNode } from 'react';
 
 const INTERACTIVE_DESCENDANT_SELECTOR = [
   'button',
@@ -77,6 +77,7 @@ export function DataTable<Row>({
   onToggleExpanded,
   renderExpanded,
 }: DataTableProps<Row>) {
+  const detailIdPrefix = 'data-table-' + useId().replace(/:/g, '');
   const activate = (row: Row) => {
     onSelect?.(row);
     onToggleExpanded?.(row);
@@ -121,10 +122,11 @@ export function DataTable<Row>({
               <td colSpan={columns.length}>{emptyMessage}</td>
             </tr>
           ) : (
-            rows.map((row) => {
+            rows.map((row, rowIndex) => {
               const key = rowKey(row);
               const selected = selectedKey === key;
               const expanded = expandedKey === key;
+              const detailId = detailIdPrefix + '-detail-' + String(rowIndex);
               return [
                 <tr
                   key={key}
@@ -133,6 +135,11 @@ export function DataTable<Row>({
                   aria-label={rowLabel?.(row)}
                   aria-selected={onSelect ? selected : undefined}
                   aria-expanded={onToggleExpanded ? expanded : undefined}
+                  aria-controls={
+                    onToggleExpanded && expanded && renderExpanded
+                      ? detailId
+                      : undefined
+                  }
                   onClick={interactive ? (event) => onClick(event, row) : undefined}
                   onKeyDown={
                     interactive ? (event) => onKeyDown(event, row) : undefined
@@ -153,7 +160,11 @@ export function DataTable<Row>({
                   ))}
                 </tr>,
                 expanded && renderExpanded ? (
-                  <tr className="data-table__expanded" key={key + '-expanded'}>
+                  <tr
+                    id={detailId}
+                    className="data-table__expanded"
+                    key={key + '-expanded'}
+                  >
                     <td colSpan={columns.length}>{renderExpanded(row)}</td>
                   </tr>
                 ) : null,

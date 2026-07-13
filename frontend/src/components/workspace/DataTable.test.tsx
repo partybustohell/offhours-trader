@@ -72,6 +72,11 @@ describe('DataTable', () => {
     );
     const row = screen.getByRole('row', { name: 'Inspect AMD order' });
     expect(row).toHaveAttribute('aria-expanded', 'true');
+    const detailId = row.getAttribute('aria-controls');
+    expect(detailId).toBeTruthy();
+    expect(document.getElementById(detailId!)).toHaveClass(
+      'data-table__expanded',
+    );
     expect(screen.getByText('AMD raw')).toBeVisible();
     await userEvent.click(row);
     expect(onToggleExpanded).toHaveBeenCalledWith({ symbol: 'AMD', price: 172.4 });
