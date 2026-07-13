@@ -32,8 +32,40 @@ type PositionRow =
   | { kind: 'order'; key: string; value: BrokerOrder }
   | { kind: 'rejection'; key: string; value: RiskRejectionRow };
 
+const warningBrokerStatuses = new Set([
+  'accepted',
+  'accepted_for_bidding',
+  'calculated',
+  'canceled',
+  'cancelled',
+  'closed',
+  'done_for_day',
+  'expired',
+  'new',
+  'partially_filled',
+  'pending',
+  'pending_cancel',
+  'pending_new',
+  'pending_replace',
+  'replaced',
+  'stopped',
+  'suspended',
+]);
+
 function rowKey(row: PositionRow): string {
   return row.key;
+}
+
+function positionKey(position: Position): string {
+  return 'position:' + position.ticker;
+}
+
+function orderKey(order: BrokerOrder): string {
+  return 'order:' + order.id;
+}
+
+function rejectionKey(rejection: RiskRejectionRow): string {
+  return 'rejection:' + rejection.id;
 }
 
 function etDate(value: Date): string | null {
@@ -81,7 +113,7 @@ function brokerStatusClass(status: string): string | undefined {
     return 'semantic-text--positive';
   }
   if (normalized === 'rejected') return 'semantic-text--negative';
-  if (normalized === 'pending' || normalized.startsWith('pending_') || normalized === 'partially_filled') {
+  if (warningBrokerStatuses.has(normalized)) {
     return 'semantic-text--warning';
   }
   return undefined;
@@ -95,9 +127,15 @@ function brokerStatus(status: string) {
   );
 }
 
-function recordedId(value: string | null | undefined): string {
+function recordedText(value: string | null | undefined): string {
   const recorded = value?.trim();
   return recorded ? recorded : 'Not recorded';
+}
+
+function recordedNumber(value: number | null | undefined): string {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? String(value)
+    : 'Not available';
 }
 
 function backLabel(tab: PositionsTab): string {
@@ -124,16 +162,20 @@ export function PositionsView({
       ? []
       : positions.positions.map((value) => ({
           kind: 'position',
-          key: value.ticker,
+          key: positionKey(value),
           value,
         }))
     : tab === 'orders'
       ? orders.error
         ? []
-        : todaysOrders.map((value) => ({ kind: 'order', key: value.id, value }))
+        : todaysOrders.map((value) => ({
+            kind: 'order',
+            key: orderKey(value),
+            value,
+          }))
       : rejections.map((value) => ({
           kind: 'rejection',
-          key: value.id,
+          key: rejectionKey(value),
           value,
         }));
   const selection = useLinkedSelection(rows, rowKey);
@@ -186,7 +228,7 @@ export function PositionsView({
               mobilePriority: 'secondary',
             },
           ]}
-          rowKey={(row) => row.ticker}
+          rowKey={positionKey}
           rowLabel={(row) => 'Inspect ' + row.ticker + ' position'}
           selectedKey={
             selection.selectedItem?.kind === 'position'
@@ -194,7 +236,11 @@ export function PositionsView({
               : null
           }
           onSelect={(value) =>
-            selection.select({ kind: 'position', key: value.ticker, value })
+            selection.select({
+              kind: 'position',
+              key: positionKey(value),
+              value,
+            })
           }
           emptyMessage="No open positions."
         />
@@ -214,7 +260,7 @@ export function PositionsView({
             {
               id: 'quantity',
               header: 'Quantity',
-              cell: (row) => row.qty,
+              cell: (row) => recordedNumber(row.qty),
               align: 'right',
               mobilePriority: 'secondary',
             },
@@ -230,7 +276,7 @@ export function PositionsView({
               mobilePriority: 'secondary',
             },
           ]}
-          rowKey={(row) => row.id}
+          rowKey={orderKey}
           rowLabel={(row) => 'Inspect order ' + row.id}
           selectedKey={
             selection.selectedItem?.kind === 'order'
@@ -238,7 +284,7 @@ export function PositionsView({
               : null
           }
           onSelect={(value) =>
-            selection.select({ kind: 'order', key: value.id, value })
+            selection.select({ kind: 'order', key: orderKey(value), value })
           }
           emptyMessage="No orders were submitted today."
         />
@@ -257,7 +303,7 @@ export function PositionsView({
             },
             { id: 'reason', header: 'Reason', cell: (row) => row.reason },
           ]}
-          rowKey={(row) => row.id}
+          rowKey={rejectionKey}
           rowLabel={(row) => 'Inspect ' + row.symbol + ' rejection'}
           selectedKey={
             selection.selectedItem?.kind === 'rejection'
@@ -265,7 +311,11 @@ export function PositionsView({
               : null
           }
           onSelect={(value) =>
-            selection.select({ kind: 'rejection', key: value.id, value })
+            selection.select({
+              kind: 'rejection',
+              key: rejectionKey(value),
+              value,
+            })
           }
           emptyMessage="No orders were rejected by the risk checks today."
         />
@@ -291,13 +341,22 @@ export function PositionsView({
         </dl>
       ) : selected.kind === 'order' ? (
         <dl className="definition-rows">
-          <div><dt>Order ID</dt><dd>{recordedId(selected.value.id)}</dd></div>
-          <div><dt>Client order ID</dt><dd>{recordedId(selected.value.clientOrderId)}</dd></div>
-          <div><dt>Raw broker status</dt><dd>{selected.value.status}</dd></div>
+          <div><dt>Symbol</dt><dd>{recordedText(selected.value.ticker)}</dd></div>
+          <div><dt>Side</dt><dd>{sentenceCase(selected.value.side)}</dd></div>
+          <div><dt>Quantity</dt><dd>{recordedNumber(selected.value.qty)}</dd></div>
+          <div><dt>Type</dt><dd>{sentenceCase(selected.value.type ?? '')}</dd></div>
+          <div>
+            <dt>Time in force</dt>
+            <dd>{sentenceCase(selected.value.timeInForce ?? '')}</dd>
+          </div>
+          <div><dt>Order ID</dt><dd>{recordedText(selected.value.id)}</dd></div>
+          <div><dt>Client order ID</dt><dd>{recordedText(selected.value.clientOrderId)}</dd></div>
+          <div><dt>Status</dt><dd>{brokerStatus(selected.value.status)}</dd></div>
+          <div><dt>Raw broker status</dt><dd>{recordedText(selected.value.status)}</dd></div>
           <div><dt>Submitted</dt><dd>{formatEtTimestamp(selected.value.submittedAt)}</dd></div>
           <div><dt>Limit price</dt><dd>{formatUsd(selected.value.limitPrice)}</dd></div>
           <div><dt>Stop price</dt><dd>{formatUsd(selected.value.stopPrice)}</dd></div>
-          <div><dt>Filled quantity</dt><dd>{selected.value.filledQty ?? 'Not recorded'}</dd></div>
+          <div><dt>Filled quantity</dt><dd>{recordedNumber(selected.value.filledQty)}</dd></div>
         </dl>
       ) : (
         <div className="detail-stack">

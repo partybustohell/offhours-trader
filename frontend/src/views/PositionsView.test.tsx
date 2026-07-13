@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { auditFixture, ordersFixture, positionsFixture } from '../test/fixtures';
@@ -26,8 +26,9 @@ describe('PositionsView', () => {
     expect(screen.queryByRole('table', { name: 'Orders' })).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('tab', { name: 'Orders' }));
-    expect(screen.getByRole('table', { name: 'Orders' })).toBeVisible();
-    expect(screen.getByText('Filled')).toBeVisible();
+    const orders = screen.getByRole('table', { name: 'Orders' });
+    expect(orders).toBeVisible();
+    expect(within(orders).getByText('Filled')).toBeVisible();
 
     await userEvent.click(screen.getByRole('tab', { name: 'Risk rejections' }));
     const rejections = screen.getByRole('table', { name: 'Risk rejections' });
@@ -138,6 +139,42 @@ describe('PositionsView', () => {
     expect(within(table).queryByText('NEXT')).not.toBeInTheDocument();
   });
 
+  it('renders production-shaped risk rejections from the current ET day', async () => {
+    render(
+      <PositionsView
+        positions={positionsFixture}
+        orders={ordersFixture}
+        audit={[
+          {
+            ts: '2026-07-12T14:15:00.000Z',
+            kind: 'order_rejected',
+            data: {
+              order: { ticker: 'AMD', side: 'buy', qty: 20, limitPrice: 172.4 },
+              reasons: ['trading halted', '', 'exceeds max position size'],
+            },
+          },
+          {
+            ts: '2026-07-11T14:15:00.000Z',
+            kind: 'order_rejected',
+            data: {
+              order: { ticker: 'OLD', side: 'buy', qty: 10, limitPrice: 10 },
+              reasons: ['quote was stale'],
+            },
+          },
+        ]}
+        now={fixedNow}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('tab', { name: 'Risk rejections' }));
+    const table = screen.getByRole('table', { name: 'Risk rejections' });
+    expect(within(table).getByText('AMD')).toBeVisible();
+    expect(
+      within(table).getByText('Trading halted. Exceeds max position size.'),
+    ).toBeVisible();
+    expect(within(table).queryByText('OLD')).not.toBeInTheDocument();
+  });
+
   it('pairs position direction and signed gain or loss with semantic text classes', () => {
     const positions: Position[] = [
       positionsFixture.positions[0],
@@ -217,6 +254,24 @@ describe('PositionsView', () => {
         status: 'pending_new',
         clientOrderId: '   ',
       },
+      {
+        ...ordersFixture.orders[0],
+        id: 'order-accepted',
+        ticker: 'READY',
+        status: 'accepted',
+      },
+      {
+        ...ordersFixture.orders[0],
+        id: 'order-closed',
+        ticker: 'CLOSED',
+        status: 'canceled',
+      },
+      {
+        ...ordersFixture.orders[0],
+        id: 'order-unknown',
+        ticker: 'UNKNOWN',
+        status: 'mystery_state',
+      },
     ];
 
     render(
@@ -252,6 +307,24 @@ describe('PositionsView', () => {
     expect(within(pendingRow).getByText('Pending new')).toHaveClass(
       'semantic-text--warning',
     );
+
+    expect(
+      within(
+        screen.getByRole('row', { name: 'Inspect order order-accepted' }),
+      ).getByText('Accepted'),
+    ).toHaveClass('semantic-text--warning');
+    expect(
+      within(
+        screen.getByRole('row', { name: 'Inspect order order-closed' }),
+      ).getByText('Canceled'),
+    ).toHaveClass('semantic-text--warning');
+
+    const unknownStatus = within(
+      screen.getByRole('row', { name: 'Inspect order order-unknown' }),
+    ).getByText('Mystery state');
+    expect(unknownStatus).not.toHaveClass('semantic-text--positive');
+    expect(unknownStatus).not.toHaveClass('semantic-text--negative');
+    expect(unknownStatus).not.toHaveClass('semantic-text--warning');
     await userEvent.click(pendingRow);
 
     const detail = screen.getByRole('group', {
@@ -262,6 +335,95 @@ describe('PositionsView', () => {
     );
     expect(within(detail).getByText('Client order ID').nextElementSibling).toHaveTextContent(
       /^Not recorded$/,
+    );
+  });
+
+  it('shows every order field and truthful missing values when mobile hides the master', async () => {
+    setViewport(390, 844);
+    const user = userEvent.setup();
+    const order: BrokerOrder = {
+      id: 'detail-order',
+      ticker: 'WBD',
+      side: 'sell',
+      qty: Number.NaN,
+      type: '   ',
+      limitPrice: Number.NaN,
+      stopPrice: Number.POSITIVE_INFINITY,
+      timeInForce: '',
+      status: 'pending_replace',
+      submittedAt: '2026-07-12T14:05:00.000Z',
+      clientOrderId: '   ',
+    };
+
+    render(
+      <PositionsView
+        positions={positionsFixture}
+        orders={{ orders: [order] }}
+        audit={auditFixture}
+        now={fixedNow}
+      />,
+    );
+
+    await user.click(screen.getByRole('tab', { name: 'Orders' }));
+    const table = screen.getByRole('table', { name: 'Orders' });
+    await user.click(screen.getByRole('row', { name: 'Inspect order detail-order' }));
+
+    expect(table).not.toBeVisible();
+    const detail = screen.getByRole('group', {
+      name: 'Position and order detail',
+    });
+    expect(detail).toBeVisible();
+    const expectedFields = [
+      ['Symbol', 'WBD'],
+      ['Side', 'Sell'],
+      ['Quantity', 'Not available'],
+      ['Type', 'Not recorded'],
+      ['Time in force', 'Not recorded'],
+      ['Order ID', 'detail-order'],
+      ['Client order ID', 'Not recorded'],
+      ['Status', 'Pending replace'],
+      ['Raw broker status', 'pending_replace'],
+      ['Submitted', '10:05:00 ET'],
+      ['Limit price', 'Not available'],
+      ['Stop price', 'Not available'],
+      ['Filled quantity', 'Not available'],
+    ] as const;
+    for (const [label, value] of expectedFields) {
+      expect(within(detail).getByText(label).nextElementSibling).toHaveTextContent(
+        new RegExp('^' + value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$'),
+      );
+    }
+  });
+
+  it('falls back to the first order when a position ticker collides with another order ID', async () => {
+    render(
+      <PositionsView
+        positions={{
+          positions: [
+            { ...positionsFixture.positions[0], ticker: 'shared-id' },
+          ],
+        }}
+        orders={{
+          orders: [
+            { ...ordersFixture.orders[0], id: 'first-order', ticker: 'FIRST' },
+            { ...ordersFixture.orders[0], id: 'shared-id', ticker: 'SECOND' },
+          ],
+        }}
+        audit={auditFixture}
+        now={fixedNow}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole('tab', { name: 'Orders' }));
+    const first = screen.getByRole('row', { name: 'Inspect order first-order' });
+    const colliding = screen.getByRole('row', { name: 'Inspect order shared-id' });
+    await waitFor(() => expect(first).toHaveAttribute('aria-selected', 'true'));
+    expect(colliding).toHaveAttribute('aria-selected', 'false');
+    const detail = screen.getByRole('group', {
+      name: 'Position and order detail',
+    });
+    expect(within(detail).getByText('Symbol').nextElementSibling).toHaveTextContent(
+      /^FIRST$/,
     );
   });
 
