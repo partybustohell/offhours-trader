@@ -2,6 +2,10 @@ import { useMemo, useState } from 'react';
 import { DataTable, type DataColumn } from '../components/workspace/DataTable';
 import { MasterDetail } from '../components/workspace/MasterDetail';
 import { Pane } from '../components/workspace/Pane';
+import {
+  SemanticText,
+  type SemanticTone,
+} from '../components/workspace/SemanticText';
 import { StatusMessage } from '../components/workspace/StatusMessage';
 import { useLinkedSelection } from '../hooks/useLinkedSelection';
 import {
@@ -43,8 +47,22 @@ function symbolKey(item: ResearchSymbol): string {
   return item.symbol;
 }
 
-function direction(direction: Direction): string {
-  return direction === 'long' ? 'Long' : direction === 'short' ? 'Short' : 'No position';
+function directionText(value: Direction): string {
+  return value === 'long' ? 'Long' : value === 'short' ? 'Short' : 'No position';
+}
+
+function directionTone(value: Direction): SemanticTone {
+  if (value === 'long') return 'positive';
+  if (value === 'short') return 'negative';
+  return 'neutral';
+}
+
+function recordedDirection(value: Direction | null) {
+  return (
+    <SemanticText tone={value ? directionTone(value) : 'neutral'}>
+      {value ? directionText(value) : 'Not recorded'}
+    </SemanticText>
+  );
 }
 
 function recordedText(value: string): string {
@@ -101,7 +119,15 @@ export function ResearchView({
   const rthRows = planRows(rthPlan);
   const planColumns: DataColumn<PlanResearchSymbol>[] = [
     { id: 'symbol', header: 'Symbol', cell: (row) => row.symbol },
-    { id: 'outcome', header: 'Outcome', cell: (row) => row.outcome },
+    {
+      id: 'outcome',
+      header: 'Outcome',
+      cell: (row) => (
+        <SemanticText tone={row.outcome === 'Selected' ? 'positive' : 'neutral'}>
+          {row.outcome}
+        </SemanticText>
+      ),
+    },
   ];
 
   const selectSymbol = (row: ResearchSymbol) => {
@@ -258,7 +284,10 @@ export function ResearchView({
                   <dt>Expires</dt>
                   <dd>{selectedPlan ? formatEtTimestamp(selectedPlan.expiresAt) : 'Not recorded'}</dd>
                 </div>
-                <div><dt>Position</dt><dd>{direction(selectedEntry.direction)}</dd></div>
+                <div>
+                  <dt>Position</dt>
+                  <dd>{recordedDirection(selectedEntry.direction)}</dd>
+                </div>
                 <div>
                   <dt>Required analyst count</dt>
                   <dd>{requiredAnalystCount(config)}</dd>
@@ -297,7 +326,7 @@ export function ResearchView({
               {
                 id: 'position',
                 header: 'Position',
-                cell: (row) => row.view ? direction(row.view.direction) : 'Not recorded',
+                cell: (row) => recordedDirection(row.view?.direction ?? null),
               },
               {
                 id: 'confidence',

@@ -206,7 +206,10 @@ describe('PositionsView', () => {
     );
 
     const longRow = screen.getByRole('row', { name: 'Inspect AMD position' });
-    expect(within(longRow).getByText('Long')).toHaveClass('semantic-text--positive');
+    expect(within(longRow).getByText('Long')).toHaveClass(
+      'semantic-text',
+      'semantic-text--positive',
+    );
     expect(within(longRow).getByText('+$88.00')).toHaveClass(
       'semantic-text--positive',
     );
@@ -224,12 +227,14 @@ describe('PositionsView', () => {
     ).getByText('$0.00');
     expect(zero).not.toHaveClass('semantic-text--positive');
     expect(zero).not.toHaveClass('semantic-text--negative');
+    expect(zero).toHaveClass('semantic-text', 'semantic-text--neutral');
 
     const unknown = within(
       screen.getByRole('row', { name: 'Inspect UNKNOWN position' }),
     ).getByText('Not available');
     expect(unknown).not.toHaveClass('semantic-text--positive');
     expect(unknown).not.toHaveClass('semantic-text--negative');
+    expect(unknown).toHaveClass('semantic-text', 'semantic-text--neutral');
   });
 
   it('uses ordinary status text with semantic classes and keeps raw status in detail', async () => {

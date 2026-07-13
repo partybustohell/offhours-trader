@@ -18,6 +18,39 @@ const events: AuditEvent[] = [
 ];
 
 describe('AuditView', () => {
+  it('applies one consistent semantic tone mapping to every recorded activity status', () => {
+    render(
+      <AuditView
+        events={[
+          { ts: '2026-07-12T14:00:00.000Z', kind: 'thesis', data: {} },
+          { ts: '2026-07-12T14:01:00.000Z', kind: 'tick', data: { skipped: true } },
+          { ts: '2026-07-12T14:02:00.000Z', kind: 'order_rejected', data: {} },
+          { ts: '2026-07-12T14:03:00.000Z', kind: 'error', data: {} },
+          { ts: '2026-07-12T14:04:00.000Z', kind: 'halt', data: {} },
+          { ts: '2026-07-12T14:05:00.000Z', kind: 'proposed_order', data: {} },
+          { ts: '2026-07-12T14:06:00.000Z', kind: 'broker_heartbeat', data: {} },
+        ]}
+      />,
+    );
+
+    const expected = [
+      ['Completed', 'positive'],
+      ['Rejected', 'negative'],
+      ['Failed', 'negative'],
+      ['Skipped', 'warning'],
+      ['Halted', 'warning'],
+      ['Pending', 'warning'],
+      ['Unknown', 'neutral'],
+    ] as const;
+    const table = screen.getByRole('table', { name: 'Audit events' });
+    for (const [label, tone] of expected) {
+      expect(within(table).getByText(label)).toHaveClass(
+        'semantic-text',
+        'semantic-text--' + tone,
+      );
+    }
+  });
+
   it('keeps an unknown event visible and expands its raw kind and JSON', async () => {
     render(<AuditView events={events} />);
 

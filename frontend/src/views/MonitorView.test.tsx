@@ -27,6 +27,22 @@ const props = {
   now: fixedNow,
 };
 
+function definitionValue(label: string): HTMLElement {
+  const value = screen.getByText(label, { selector: 'dt' }).nextElementSibling;
+  if (!(value instanceof HTMLElement)) {
+    throw new Error('Definition value missing for ' + label + '.');
+  }
+  return value;
+}
+
+function semanticDefinitionValue(label: string): HTMLElement {
+  const value = definitionValue(label).querySelector('.semantic-text');
+  if (!(value instanceof HTMLElement)) {
+    throw new Error('Semantic definition value missing for ' + label + '.');
+  }
+  return value;
+}
+
 describe('MonitorView', () => {
   it('makes the candidate table dominant and links a selected row to detail', async () => {
     render(<MonitorView {...props} />);
@@ -45,6 +61,34 @@ describe('MonitorView', () => {
     );
   });
 
+  it('uses clinical semantic tones for recorded candidate direction, outcome, and activity', () => {
+    render(<MonitorView {...props} />);
+
+    const candidateTable = screen.getByRole('table', { name: 'Candidate monitor' });
+    const amd = within(candidateTable).getByRole('row', { name: 'Inspect AMD' });
+    expect(within(amd).getByText('Long')).toHaveClass(
+      'semantic-text',
+      'semantic-text--positive',
+    );
+    expect(within(amd).getByText('Selected for the trading plan')).toHaveClass(
+      'semantic-text',
+      'semantic-text--positive',
+    );
+    const wbd = within(candidateTable).getByRole('row', { name: 'Inspect WBD' });
+    expect(within(wbd).getByText(/Not selected —/)).toHaveClass(
+      'semantic-text',
+      'semantic-text--neutral',
+    );
+
+    const activity = screen.getByRole('table', { name: 'Recent activity' });
+    expect(
+      within(within(activity).getByText('Completed').closest('tr')!).getByText('Completed'),
+    ).toHaveClass('semantic-text', 'semantic-text--positive');
+    expect(
+      within(within(activity).getByText('Rejected').closest('tr')!).getByText('Rejected'),
+    ).toHaveClass('semantic-text', 'semantic-text--negative');
+  });
+
   it('states unavailable account data without estimating it', () => {
     render(<MonitorView {...props} />);
     expect(screen.getByText('Daily deployment used')).toBeVisible();
@@ -61,11 +105,9 @@ describe('MonitorView', () => {
     expect(screen.getByText('Open exposure').nextElementSibling).toHaveTextContent(/^\$0\.00$/);
     expect(screen.getByText('Open positions').nextElementSibling).toHaveTextContent(/^0$/);
     expect(screen.getByText('Open gain/loss').nextElementSibling).toHaveTextContent(/^\$0\.00$/);
-    expect(screen.getByText('Open gain/loss').nextElementSibling).not.toHaveClass(
-      'semantic-text--positive',
-    );
-    expect(screen.getByText('Open gain/loss').nextElementSibling).not.toHaveClass(
-      'semantic-text--negative',
+    expect(semanticDefinitionValue('Open gain/loss')).toHaveClass(
+      'semantic-text',
+      'semantic-text--neutral',
     );
 
     rerender(
@@ -78,11 +120,9 @@ describe('MonitorView', () => {
     expect(screen.getByText('Open exposure').nextElementSibling).toHaveTextContent(/^Not available$/);
     expect(screen.getByText('Open positions').nextElementSibling).toHaveTextContent(/^Not available$/);
     expect(screen.getByText('Open gain/loss').nextElementSibling).toHaveTextContent(/^Not available$/);
-    expect(screen.getByText('Open gain/loss').nextElementSibling).not.toHaveClass(
-      'semantic-text--positive',
-    );
-    expect(screen.getByText('Open gain/loss').nextElementSibling).not.toHaveClass(
-      'semantic-text--negative',
+    expect(semanticDefinitionValue('Open gain/loss')).toHaveClass(
+      'semantic-text',
+      'semantic-text--neutral',
     );
   });
 
@@ -90,10 +130,11 @@ describe('MonitorView', () => {
     const { rerender } = render(<MonitorView {...props} />);
 
     expect(screen.getByText('Open gain/loss').nextElementSibling).toHaveTextContent(/^\+\$88\.00$/);
-    expect(screen.getByText('Open gain/loss').nextElementSibling).toHaveClass(
+    expect(semanticDefinitionValue('Open gain/loss')).toHaveClass(
+      'semantic-text',
       'semantic-text--positive',
     );
-    expect(screen.getByText('Open gain/loss').nextElementSibling).not.toHaveClass(
+    expect(semanticDefinitionValue('Open gain/loss')).not.toHaveClass(
       'semantic-text--negative',
     );
 
@@ -110,10 +151,11 @@ describe('MonitorView', () => {
     );
 
     expect(screen.getByText('Open gain/loss').nextElementSibling).toHaveTextContent(/^-\$88\.00$/);
-    expect(screen.getByText('Open gain/loss').nextElementSibling).toHaveClass(
+    expect(semanticDefinitionValue('Open gain/loss')).toHaveClass(
+      'semantic-text',
       'semantic-text--negative',
     );
-    expect(screen.getByText('Open gain/loss').nextElementSibling).not.toHaveClass(
+    expect(semanticDefinitionValue('Open gain/loss')).not.toHaveClass(
       'semantic-text--positive',
     );
   });
@@ -143,11 +185,9 @@ describe('MonitorView', () => {
     expect(screen.getByText('Open gain/loss').nextElementSibling).toHaveTextContent(
       /^Not available$/,
     );
-    expect(screen.getByText('Open gain/loss').nextElementSibling).not.toHaveClass(
-      'semantic-text--positive',
-    );
-    expect(screen.getByText('Open gain/loss').nextElementSibling).not.toHaveClass(
-      'semantic-text--negative',
+    expect(semanticDefinitionValue('Open gain/loss')).toHaveClass(
+      'semantic-text',
+      'semantic-text--neutral',
     );
   });
 
@@ -155,20 +195,16 @@ describe('MonitorView', () => {
     const { rerender } = render(<MonitorView {...props} status={null} />);
 
     expect(screen.getByText('Risk halt').nextElementSibling).toHaveTextContent('Not available');
-    expect(screen.getByText('Risk halt').nextElementSibling).not.toHaveClass(
-      'semantic-text--positive',
-    );
-    expect(screen.getByText('Risk halt').nextElementSibling).not.toHaveClass(
-      'semantic-text--negative',
+    expect(semanticDefinitionValue('Risk halt')).toHaveClass(
+      'semantic-text',
+      'semantic-text--neutral',
     );
 
     rerender(<MonitorView {...props} status={{ ...statusFixture, halt: null }} />);
     expect(screen.getByText('Risk halt').nextElementSibling).toHaveTextContent('Not available');
-    expect(screen.getByText('Risk halt').nextElementSibling).not.toHaveClass(
-      'semantic-text--positive',
-    );
-    expect(screen.getByText('Risk halt').nextElementSibling).not.toHaveClass(
-      'semantic-text--negative',
+    expect(semanticDefinitionValue('Risk halt')).toHaveClass(
+      'semantic-text',
+      'semantic-text--neutral',
     );
 
     rerender(
@@ -181,7 +217,8 @@ describe('MonitorView', () => {
       />,
     );
     expect(screen.getByText('Risk halt').nextElementSibling).toHaveTextContent('Clear');
-    expect(screen.getByText('Risk halt').nextElementSibling).toHaveClass(
+    expect(semanticDefinitionValue('Risk halt')).toHaveClass(
+      'semantic-text',
       'semantic-text--positive',
     );
   });
@@ -333,6 +370,10 @@ describe('MonitorView', () => {
     const unknownRow = screen.getByText('Unknown event').closest('tr');
     expect(unknownRow).toHaveTextContent('Unknown');
     expect(unknownRow).not.toHaveTextContent('Skipped');
+    expect(within(unknownRow!).getByText('Unknown')).toHaveClass(
+      'semantic-text',
+      'semantic-text--neutral',
+    );
     await userEvent.click(unknownRow!);
 
     expect(screen.getByText('Raw kind')).toBeVisible();

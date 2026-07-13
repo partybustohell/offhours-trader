@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { DataTable, type DataColumn } from '../components/workspace/DataTable';
 import { Pane } from '../components/workspace/Pane';
+import {
+  SemanticText,
+  type SemanticTone,
+} from '../components/workspace/SemanticText';
 import { StatusMessage } from '../components/workspace/StatusMessage';
 import { presentAuditEvent, type PresentedAuditEvent } from '../presentation/audit';
 import { sentenceCase } from '../presentation/format';
@@ -19,6 +23,17 @@ const statuses = [
   'pending',
   'unknown',
 ] as const;
+
+function activityStatusTone(
+  status: PresentedAuditEvent['status'],
+): SemanticTone {
+  if (status === 'completed') return 'positive';
+  if (status === 'failed' || status === 'rejected') return 'negative';
+  if (status === 'pending' || status === 'skipped' || status === 'halted') {
+    return 'warning';
+  }
+  return 'neutral';
+}
 
 function stableContent(value: unknown): string {
   if (Array.isArray(value)) {
@@ -122,7 +137,11 @@ export function AuditView({ events }: AuditViewProps) {
     {
       id: 'status',
       header: 'Status',
-      cell: (row) => sentenceCase(row.status),
+      cell: (row) => (
+        <SemanticText tone={activityStatusTone(row.status)}>
+          {sentenceCase(row.status)}
+        </SemanticText>
+      ),
     },
     {
       id: 'description',

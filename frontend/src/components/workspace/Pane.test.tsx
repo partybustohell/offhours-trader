@@ -4,6 +4,20 @@ import { describe, expect, it, vi } from 'vitest';
 import { Pane } from './Pane';
 
 describe('Pane', () => {
+  it('places an untabbed body in the flexible row without inline overflow', () => {
+    render(
+      <Pane id="account" title="Account" overflow="hidden">
+        Account detail
+      </Pane>,
+    );
+
+    const region = screen.getByRole('region', { name: 'Account' });
+    const body = region.querySelector('.pane__body');
+    expect(body).toHaveClass('pane__body--overflow-hidden');
+    expect(body).not.toHaveAttribute('style');
+    expect(body).not.toHaveAttribute('role');
+  });
+
   it('exposes a named region and accessible detail tabs', async () => {
     const onTabChange = vi.fn();
     render(

@@ -13,6 +13,10 @@ import type {
 import { DataTable, type DataColumn } from '../components/workspace/DataTable';
 import { Pane } from '../components/workspace/Pane';
 import { ResizableWorkspace } from '../components/workspace/ResizableWorkspace';
+import {
+  SemanticText,
+  type SemanticTone,
+} from '../components/workspace/SemanticText';
 import { StatusMessage } from '../components/workspace/StatusMessage';
 import { useLinkedSelection } from '../hooks/useLinkedSelection';
 import {
@@ -48,11 +52,34 @@ function directionText(direction: Direction): string {
   return 'No position';
 }
 
+function directionTone(direction: Direction): SemanticTone {
+  if (direction === 'long') return 'positive';
+  if (direction === 'short') return 'negative';
+  return 'neutral';
+}
+
+function activityStatusTone(
+  status: PresentedAuditEvent['status'],
+): SemanticTone {
+  if (status === 'completed') return 'positive';
+  if (status === 'failed' || status === 'rejected') return 'negative';
+  if (status === 'pending' || status === 'skipped' || status === 'halted') {
+    return 'warning';
+  }
+  return 'neutral';
+}
+
+interface AccountRow {
+  label: string;
+  value: string;
+  tone: SemanticTone | null;
+}
+
 function accountRows(
   status: StatusResponse | null,
   positions: PositionsResponse,
   config: Config | null,
-) {
+): AccountRow[] {
   const marketValuesRecorded = positions.positions.every((position) =>
     Number.isFinite(position.marketValue),
   );
@@ -74,42 +101,58 @@ function accountRows(
   const brokerDataAvailable = !positions.error;
   const halt = status?.halt;
   return [
-    ['Account value', formatUsd(status?.equity), undefined],
-    [
-      'Open exposure',
-      brokerDataAvailable && exposure !== null ? formatUsd(exposure) : 'Not available',
-      undefined,
-    ],
-    ['Open positions', brokerDataAvailable ? String(positions.positions.length) : 'Not available', undefined],
-    [
-      'Open gain/loss',
-      !brokerDataAvailable || pnl === null
+    { label: 'Account value', value: formatUsd(status?.equity), tone: null },
+    {
+      label: 'Open exposure',
+      value: brokerDataAvailable && exposure !== null
+        ? formatUsd(exposure)
+        : 'Not available',
+      tone: null,
+    },
+    {
+      label: 'Open positions',
+      value: brokerDataAvailable
+        ? String(positions.positions.length)
+        : 'Not available',
+      tone: null,
+    },
+    {
+      label: 'Open gain/loss',
+      value: !brokerDataAvailable || pnl === null
         ? 'Not available'
         : pnl > 0
           ? '+' + formatUsd(pnl)
           : formatUsd(pnl),
-      !brokerDataAvailable || pnl === null || pnl === 0
-        ? undefined
+      tone: !brokerDataAvailable || pnl === null || pnl === 0
+        ? 'neutral'
         : pnl > 0
-          ? 'semantic-text--positive'
-          : 'semantic-text--negative',
-    ],
-    ['Daily deployment used', 'Not available from current API', undefined],
-    ['Daily deployment limit', formatPercent(config?.max_daily_deploy_pct), undefined],
-    [
-      'Risk halt',
-      halt == null
+          ? 'positive'
+          : 'negative',
+    },
+    {
+      label: 'Daily deployment used',
+      value: 'Not available from current API',
+      tone: null,
+    },
+    {
+      label: 'Daily deployment limit',
+      value: formatPercent(config?.max_daily_deploy_pct),
+      tone: null,
+    },
+    {
+      label: 'Risk halt',
+      value: halt == null
         ? 'Not available'
         : halt.halted
           ? 'Halted — ' + (halt.reason || 'Reason not recorded')
           : 'Clear',
-      halt == null
-        ? undefined
+      tone: halt == null
+        ? 'neutral'
         : halt.halted
-          ? 'semantic-text--negative'
-          : 'semantic-text--positive',
-    ],
-  ] as const;
+          ? 'negative'
+          : 'positive',
+    },
+  ];
 }
 
 function orderedAuditEvents(events: readonly AuditEvent[]) {
@@ -150,10 +193,14 @@ function AccountPane(props: Pick<MonitorViewProps, 'status' | 'positions' | 'con
   return (
     <Pane id="account-state" title="Account">
       <dl className="definition-rows">
-        {accountRows(props.status, props.positions, props.config).map(([label, value, tone]) => (
-          <div key={label}>
-            <dt>{label}</dt>
-            <dd className={tone}>{value}</dd>
+        {accountRows(props.status, props.positions, props.config).map((row) => (
+          <div key={row.label}>
+            <dt>{row.label}</dt>
+            <dd>
+              {row.tone ? (
+                <SemanticText tone={row.tone}>{row.value}</SemanticText>
+              ) : row.value}
+            </dd>
           </div>
         ))}
       </dl>
@@ -245,7 +292,14 @@ function CandidateDetail({ row, plan }: { row: CandidateDecisionRow | null; plan
         <div className="detail-stack">
           <p>{explanation}</p>
           <dl className="definition-rows">
-            <div><dt>Panel position</dt><dd>{directionText(row.panelPosition)}</dd></div>
+            <div>
+              <dt>Panel position</dt>
+              <dd>
+                <SemanticText tone={directionTone(row.panelPosition)}>
+                  {directionText(row.panelPosition)}
+                </SemanticText>
+              </dd>
+            </div>
             <div>
               <dt>Agreement</dt>
               <dd>
@@ -269,7 +323,11 @@ function CandidateDetail({ row, plan }: { row: CandidateDecisionRow | null; plan
               {
                 id: 'position',
                 header: 'Position',
-                cell: (item) => item.view ? directionText(item.view.direction) : 'Not recorded',
+                cell: (item) => (
+                  <SemanticText tone={item.view ? directionTone(item.view.direction) : 'neutral'}>
+                    {item.view ? directionText(item.view.direction) : 'Not recorded'}
+                  </SemanticText>
+                ),
               },
               {
                 id: 'confidence',
@@ -373,7 +431,15 @@ function ActivityBlotter({ audit }: { audit: readonly AuditEvent[] }) {
     { id: 'time', header: 'Time (ET)', cell: (row) => row.timestamp },
     { id: 'activity', header: 'Activity', cell: (row) => row.activity },
     { id: 'stage', header: 'Stage', cell: (row) => row.stage, mobilePriority: 'secondary' },
-    { id: 'status', header: 'Status', cell: (row) => sentenceCase(row.status) },
+    {
+      id: 'status',
+      header: 'Status',
+      cell: (row) => (
+        <SemanticText tone={activityStatusTone(row.status)}>
+          {sentenceCase(row.status)}
+        </SemanticText>
+      ),
+    },
     {
       id: 'description',
       header: 'What happened',
@@ -422,7 +488,11 @@ export function MonitorView(props: MonitorViewProps) {
     {
       id: 'position',
       header: 'Panel position',
-      cell: (row) => directionText(row.panelPosition),
+      cell: (row) => (
+        <SemanticText tone={directionTone(row.panelPosition)}>
+          {directionText(row.panelPosition)}
+        </SemanticText>
+      ),
     },
     {
       id: 'agreement',
@@ -442,7 +512,21 @@ export function MonitorView(props: MonitorViewProps) {
       align: 'right',
       mobilePriority: 'secondary',
     },
-    { id: 'outcome', header: 'Outcome', cell: (row) => row.outcomeText },
+    {
+      id: 'outcome',
+      header: 'Outcome',
+      cell: (row) => (
+        <SemanticText
+          tone={row.outcome === 'selected'
+            ? 'positive'
+            : row.outcome === 'pending'
+              ? 'warning'
+              : 'neutral'}
+        >
+          {row.outcomeText}
+        </SemanticText>
+      ),
+    },
   ];
 
   const master = (

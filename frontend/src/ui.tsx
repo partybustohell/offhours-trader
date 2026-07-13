@@ -5,4 +5,6 @@ export { MasterDetail } from './components/workspace/MasterDetail';
 export { Pane } from './components/workspace/Pane';
 export type { PaneTab } from './components/workspace/Pane';
 export { ResizableWorkspace } from './components/workspace/ResizableWorkspace';
+export { SemanticText } from './components/workspace/SemanticText';
+export type { SemanticTone } from './components/workspace/SemanticText';
 export { StatusMessage } from './components/workspace/StatusMessage';

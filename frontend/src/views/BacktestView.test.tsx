@@ -239,9 +239,11 @@ describe('BacktestView', () => {
     const zero = within(table).getByText('$0.00');
     expect(zero).not.toHaveClass('semantic-text--positive');
     expect(zero).not.toHaveClass('semantic-text--negative');
+    expect(zero).toHaveClass('semantic-text', 'semantic-text--neutral');
     const unknown = within(table).getByText('Not available');
     expect(unknown).not.toHaveClass('semantic-text--positive');
     expect(unknown).not.toHaveClass('semantic-text--negative');
+    expect(unknown).toHaveClass('semantic-text', 'semantic-text--neutral');
   });
 
   it('uses recorded-value fallbacks and keeps identical trade rows', async () => {

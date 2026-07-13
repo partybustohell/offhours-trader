@@ -166,6 +166,41 @@ describe('ResearchView', () => {
     }
   });
 
+  it('tones only recorded plan outcomes and analyst directions clinically', async () => {
+    render(<ResearchView {...props} />);
+
+    await userEvent.click(screen.getByRole('tab', { name: 'Off-hours plan' }));
+    const plan = screen.getByRole('table', { name: 'Off-hours trading plan' });
+    expect(
+      within(within(plan).getByRole('row', { name: 'Inspect AMD research' }))
+        .getByText('Selected'),
+    ).toHaveClass('semantic-text', 'semantic-text--positive');
+    expect(
+      within(within(plan).getByRole('row', { name: 'Inspect WBD research' }))
+        .getByText('Not selected'),
+    ).toHaveClass('semantic-text', 'semantic-text--neutral');
+
+    const detail = screen.getByRole('region', { name: 'Research detail' });
+    const positionValue = within(detail).getByText('Position', { selector: 'dt' })
+      .nextElementSibling;
+    expect(within(positionValue as HTMLElement).getByText('Long')).toHaveClass(
+      'semantic-text',
+      'semantic-text--positive',
+    );
+    const matrix = screen.getByRole('table', { name: 'AMD analyst matrix' });
+    const fundamental = within(matrix).getByText('Fundamental').closest('tr');
+    expect(within(fundamental!).getByText('Long')).toHaveClass(
+      'semantic-text',
+      'semantic-text--positive',
+    );
+    const absent = within(matrix).getByText('Macro').closest('tr');
+    const absentDirection = absent?.querySelectorAll('td').item(1);
+    expect(within(absentDirection as HTMLElement).getByText('Not recorded')).toHaveClass(
+      'semantic-text',
+      'semantic-text--neutral',
+    );
+  });
+
   it('makes every recorded skipped-plan reason reachable on mobile', async () => {
     setViewport(390, 844);
     const user = userEvent.setup();

@@ -8,6 +8,7 @@ import { formatEtTimestamp, formatRefreshAge } from '../../presentation/format';
 import type { RouteItem, ViewId } from '../../router';
 import type { Config, HaltState, Mode, Session } from '../../types';
 import { ActionControl } from '../workspace/ActionControl';
+import { SemanticText } from '../workspace/SemanticText';
 import { MobileControlSheet } from './MobileControlSheet';
 import { WorkspaceTabs } from './WorkspaceTabs';
 
@@ -128,36 +129,36 @@ export function OperationalHeader({
       </div>
       <div className="operational-header__state" aria-label="Operational state">
         <span>{modeText(state.mode)}</span>
-        <span className={state.session === 'closed' ? 'semantic-text--warning' : undefined}>
+        <SemanticText tone={state.session === 'closed' ? 'warning' : 'neutral'}>
           {sessionText(state.session)}
-        </span>
-        <span className={
+        </SemanticText>
+        <SemanticText tone={
           state.broker === 'connected'
-            ? 'semantic-text--positive'
+            ? 'positive'
             : state.broker === 'unavailable'
-              ? 'semantic-text--negative'
+              ? 'negative'
               : state.broker === 'missing-credentials' || state.broker === 'stale'
-                ? 'semantic-text--warning'
-                : undefined
+                ? 'warning'
+                : 'neutral'
         }>
           {brokerText(state.broker)}
-        </span>
+        </SemanticText>
         <span>{state.dataFeed ? state.dataFeed.toUpperCase() + ' feed' : 'Feed unknown'}</span>
-        <span className={
+        <SemanticText tone={
           state.polling.connectivity === 'offline'
-            ? 'semantic-text--negative'
+            ? 'negative'
             : resourceProblem || state.polling.initialLoading
-              ? 'semantic-text--warning'
-              : 'semantic-text--positive'
+              ? 'warning'
+              : 'positive'
         }>
           {refreshState}
-        </span>
-        <span className={
+        </SemanticText>
+        <SemanticText tone={
           state.halt === null
-            ? undefined
+            ? 'neutral'
             : halted
-              ? 'semantic-text--negative'
-              : 'semantic-text--positive'
+              ? 'negative'
+              : 'positive'
         }>
           {state.halt === null
             ? 'Risk state unknown'
@@ -165,7 +166,7 @@ export function OperationalHeader({
               ? 'Halted — ' + (state.halt.reason || 'Reason not recorded')
                 + (state.halt.at ? ', ' + formatEtTimestamp(state.halt.at) : '')
               : 'Risk clear'}
-        </span>
+        </SemanticText>
         <time>{etClock}</time>
       </div>
       <div className="operational-header__actions">

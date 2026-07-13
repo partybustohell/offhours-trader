@@ -451,7 +451,7 @@ Examples:
 - `Refresh failed. Broker data is unavailable. Showing data from 11:42:08 ET.`
 - `Configuration was not saved. Confidence must be between 0 and 1. Review the
   highlighted field.`
-- `Execution check failed. The broker did not respond. No order was submitted.`
+- `Order submission could not be confirmed. Check broker activity before retrying.`
 
 The interface must never imply that an order was placed when the response is
 unknown.

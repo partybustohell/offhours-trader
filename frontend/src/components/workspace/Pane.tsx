@@ -100,10 +100,9 @@ export function Pane({
       ) : null}
       <div
         id={panelId}
-        className="pane__body"
+        className={'pane__body pane__body--overflow-' + overflow}
         role={tabs && tabs.length > 0 ? 'tabpanel' : undefined}
         aria-labelledby={tabs && activeTab ? id + '-tab-' + activeTab : undefined}
-        style={{ overflow }}
       >
         {children}
       </div>

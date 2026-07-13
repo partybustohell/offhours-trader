@@ -1,6 +1,10 @@
 import { useId, useState } from 'react';
 import { DataTable } from '../components/workspace/DataTable';
 import { Pane } from '../components/workspace/Pane';
+import {
+  SemanticText,
+  type SemanticTone,
+} from '../components/workspace/SemanticText';
 import { StatusMessage } from '../components/workspace/StatusMessage';
 import { buildBacktestPoints } from '../presentation/backtest';
 import {
@@ -33,12 +37,12 @@ function formattedPnl(value: number | null | undefined): string {
 
 function pnlText(value: number | null | undefined) {
   const recorded = typeof value === 'number' && Number.isFinite(value);
-  const className = !recorded || value === 0
-    ? undefined
+  const tone: SemanticTone = !recorded || value === 0
+    ? 'neutral'
     : value > 0
-      ? 'semantic-text--positive'
-      : 'semantic-text--negative';
-  return <span className={className}>{formattedPnl(value)}</span>;
+      ? 'positive'
+      : 'negative';
+  return <SemanticText tone={tone}>{formattedPnl(value)}</SemanticText>;
 }
 
 function formatBearWeight(value: number | null | undefined): string {

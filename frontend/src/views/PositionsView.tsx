@@ -2,6 +2,10 @@ import { useMemo, useState } from 'react';
 import { DataTable } from '../components/workspace/DataTable';
 import { MasterDetail } from '../components/workspace/MasterDetail';
 import { Pane } from '../components/workspace/Pane';
+import {
+  SemanticText,
+  type SemanticTone,
+} from '../components/workspace/SemanticText';
 import { StatusMessage } from '../components/workspace/StatusMessage';
 import { useLinkedSelection } from '../hooks/useLinkedSelection';
 import { formatEtTimestamp, formatUsd, sentenceCase } from '../presentation/format';
@@ -86,44 +90,40 @@ function submittedTodayEt(order: BrokerOrder, today: string | null): boolean {
 
 function positionSide(side: Position['side']) {
   return (
-    <span
-      className={
-        side === 'long' ? 'semantic-text--positive' : 'semantic-text--negative'
-      }
-    >
+    <SemanticText tone={side === 'long' ? 'positive' : 'negative'}>
       {sentenceCase(side)}
-    </span>
+    </SemanticText>
   );
 }
 
 function positionPnl(value: number) {
   const recorded = Number.isFinite(value);
-  const className = !recorded || value === 0
-    ? undefined
+  const tone: SemanticTone = !recorded || value === 0
+    ? 'neutral'
     : value > 0
-      ? 'semantic-text--positive'
-      : 'semantic-text--negative';
+      ? 'positive'
+      : 'negative';
   const text = recorded && value > 0 ? '+' + formatUsd(value) : formatUsd(value);
-  return <span className={className}>{text}</span>;
+  return <SemanticText tone={tone}>{text}</SemanticText>;
 }
 
-function brokerStatusClass(status: string): string | undefined {
+function brokerStatusTone(status: string): SemanticTone {
   const normalized = status.trim().toLowerCase().replace(/[\s-]+/g, '_');
   if (normalized === 'filled' || normalized === 'completed') {
-    return 'semantic-text--positive';
+    return 'positive';
   }
-  if (normalized === 'rejected') return 'semantic-text--negative';
+  if (normalized === 'rejected') return 'negative';
   if (warningBrokerStatuses.has(normalized)) {
-    return 'semantic-text--warning';
+    return 'warning';
   }
-  return undefined;
+  return 'neutral';
 }
 
 function brokerStatus(status: string) {
   return (
-    <span className={brokerStatusClass(status)}>
+    <SemanticText tone={brokerStatusTone(status)}>
       {humanizeBrokerStatus(status)}
-    </span>
+    </SemanticText>
   );
 }
 
