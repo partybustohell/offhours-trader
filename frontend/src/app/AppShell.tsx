@@ -24,6 +24,17 @@ import type {
 import type { OperatorController } from './useOperatorController';
 import { useOperatorController } from './useOperatorController';
 
+function activePlanForSnapshot(data: OperatorSnapshot) {
+  const session = data.status?.session;
+  if (session === 'rth') {
+    return data.thesisRth?.kind === 'rth' ? data.thesisRth : null;
+  }
+  if (session === 'premarket' || session === 'afterhours') {
+    return data.thesis?.kind === 'offhours' ? data.thesis : null;
+  }
+  return null;
+}
+
 const resourceOrder: readonly { key: ResourceKey; label: string }[] = [
   { key: 'status', label: 'Account and broker status' },
   { key: 'candidates', label: 'Candidates' },
@@ -154,9 +165,7 @@ export interface AppShellViewProps {
 export function AppShellView({ controller, saveConfig }: AppShellViewProps) {
   const [view, navigate] = useHashView();
   const data = controller.data;
-  const activePlan = data.status?.session === 'rth'
-    ? data.thesisRth ?? data.thesis
-    : data.thesis ?? data.thesisRth;
+  const activePlan = activePlanForSnapshot(data);
   let route: ReactNode;
 
   if (view === 'overview') {

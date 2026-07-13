@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { createInitialOperatorState } from '../../app/operatorState';
 import { ROUTES } from '../../router';
@@ -98,5 +98,54 @@ describe('OperationalHeader', () => {
 
     expect(screen.getByText('Risk state unknown')).toBeVisible();
     expect(screen.queryByText('Risk clear')).not.toBeInTheDocument();
+  });
+
+  it('exposes fixed mobile slots for risk and each useful supporting state', () => {
+    const base = createInitialOperatorState();
+    render(
+      <OperationalHeader
+        state={{
+          mode: 'paper',
+          session: 'closed',
+          broker: 'missing-credentials',
+          dataFeed: 'iex',
+          halt: {
+            halted: true,
+            reason: 'manual operator intervention',
+            at: '2026-07-12T14:00:00.000Z',
+          },
+          polling: {
+            ...base.polling,
+            initialLoading: false,
+            stale: true,
+            lastFullSuccessAt: 1,
+          },
+        }}
+        routes={ROUTES}
+        activeView="overview"
+        actionStates={base.actions}
+        onNavigate={vi.fn()}
+        onAction={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+
+    const state = screen.getByLabelText('Operational state');
+    const slots = Object.fromEntries(
+      ['mode', 'session', 'broker', 'refresh', 'risk'].map((slot) => [
+        slot,
+        state.querySelector(`[data-status-slot="${slot}"]`),
+      ]),
+    );
+
+    expect(slots.mode).toHaveTextContent('Paper');
+    expect(slots.session).toHaveTextContent('Market closed');
+    expect(slots.broker).toHaveTextContent('Broker credentials missing');
+    expect(slots.refresh).toHaveTextContent('Stale');
+    expect(slots.risk).toHaveTextContent(
+      'Halted — manual operator intervention',
+    );
+    expect(within(slots.risk as HTMLElement).getByText(/Halted/)).toHaveClass(
+      'semantic-text--negative',
+    );
   });
 });

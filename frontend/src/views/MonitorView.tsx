@@ -27,6 +27,7 @@ import { presentAuditEvent, type PresentedAuditEvent } from '../presentation/aud
 import {
   formatEtTimestamp,
   formatPercent,
+  formatPercentagePoints,
   formatUsd,
   sentenceCase,
 } from '../presentation/format';
@@ -136,7 +137,7 @@ function accountRows(
     },
     {
       label: 'Daily deployment limit',
-      value: formatPercent(config?.max_daily_deploy_pct),
+      value: formatPercentagePoints(config?.max_daily_deploy_pct),
       tone: null,
     },
     {

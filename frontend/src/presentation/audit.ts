@@ -45,13 +45,25 @@ function objectData(data: unknown): Record<string, unknown> {
     : {};
 }
 
+function isProductionTickSkip(kind: string, data: Record<string, unknown>): boolean {
+  return kind === 'tick' && (
+    data.action === 'skip'
+    || data.action === 'skip_entries'
+    || data.stage === 'skip'
+  );
+}
+
 function classify(kind: string, data: Record<string, unknown>): ActivityStatus {
   if (!KNOWN_AUDIT_KINDS.includes(kind as KnownAuditKind)) return 'unknown';
   if (kind === 'error') return 'failed';
   if (kind === 'order_rejected') return 'rejected';
   if (kind === 'halt') return 'halted';
   if (kind === 'proposed_order') return 'pending';
-  if (data.status === 'skipped' || data.skipped === true) return 'skipped';
+  if (
+    data.status === 'skipped'
+    || data.skipped === true
+    || isProductionTickSkip(kind, data)
+  ) return 'skipped';
   return 'completed';
 }
 
@@ -68,6 +80,32 @@ function describe(kind: string, data: Record<string, unknown>): string {
     /closed/i.test(data.reason)
   ) {
     return 'Execution check skipped. The market session is closed. No order was evaluated.';
+  }
+  if (kind === 'tick' && data.stage === 'session_gate' && data.action === 'skip') {
+    return 'Execution check skipped. The market session is closed or disabled. No order was evaluated.';
+  }
+  if (kind === 'tick' && data.stage === 'no_thesis' && data.action === 'skip') {
+    return 'Execution check skipped. No active trading plan was available. No order was evaluated.';
+  }
+  if (kind === 'tick' && data.stage === 'lock_gate' && data.action === 'skip') {
+    return 'Execution check skipped. Another execution check was already running. No order was evaluated.';
+  }
+  if (kind === 'tick' && data.action === 'skip_entries') {
+    return 'New entries skipped. The configured entry window was closed. Existing positions remained eligible for evaluation.';
+  }
+  if (kind === 'tick' && data.stage === 'skip') {
+    const ticker = typeof data.ticker === 'string' ? ' for ' + data.ticker : '';
+    const reason = typeof data.reason === 'string'
+      ? ' ' + completeSentence(data.reason)
+      : '';
+    return 'Symbol check skipped' + ticker + '.' + reason
+      + ' No order was proposed for this check.';
+  }
+  if (kind === 'tick' && data.action === 'skip') {
+    const reason = typeof data.reason === 'string'
+      ? ' ' + completeSentence(data.reason)
+      : '';
+    return 'Execution check skipped.' + reason + ' No order was evaluated.';
   }
   const reason = typeof data.reason === 'string' ? data.reason : null;
   const message = typeof data.message === 'string' ? data.message : null;

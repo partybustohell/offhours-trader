@@ -97,6 +97,19 @@ describe('MonitorView', () => {
     );
   });
 
+  it('renders configured risk limits as percentage points', () => {
+    render(
+      <MonitorView
+        {...props}
+        config={{ ...configFixture, max_daily_deploy_pct: 10 }}
+      />,
+    );
+
+    const limit = definitionValue('Daily deployment limit');
+    expect(limit).toHaveTextContent(/^10%$/);
+    expect(limit).not.toHaveTextContent('1000%');
+  });
+
   it('reports successful empty positions as zero and failed position reads as unavailable', () => {
     const { rerender } = render(
       <MonitorView {...props} positions={{ positions: [] }} />,
@@ -379,6 +392,33 @@ describe('MonitorView', () => {
     expect(screen.getByText('Raw kind')).toBeVisible();
     expect(screen.getByText('mystery_event')).toBeVisible();
     expect(screen.getByText(/"status": "skipped"/)).toBeVisible();
+  });
+
+  it('shows production executor skips with warning semantics', () => {
+    render(
+      <MonitorView
+        {...props}
+        audit={[{
+          ts: '2026-07-13T12:30:00.000Z',
+          kind: 'tick',
+          data: {
+            stage: 'session_gate',
+            session: 'closed',
+            action: 'skip',
+            reason: 'session closed or disabled',
+          },
+        }]}
+      />,
+    );
+
+    const activity = screen.getByRole('table', { name: 'Recent activity' });
+    expect(within(activity).getByText('Skipped')).toHaveClass(
+      'semantic-text',
+      'semantic-text--warning',
+    );
+    expect(within(activity).getByText(
+      'Execution check skipped. The market session is closed or disabled. No order was evaluated.',
+    )).toBeVisible();
   });
 
   it('preserves or falls back from linked selection as candidate data refreshes', async () => {

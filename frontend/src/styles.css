@@ -1032,16 +1032,50 @@ button.is-primary {
   }
 
   .operational-header__state {
-    min-height: 34px;
+    display: grid;
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+    width: 100%;
+    min-height: 68px;
+    overflow-x: hidden;
+    overflow-y: visible;
   }
 
-  .operational-header__state > span,
-  .operational-header__state > time {
+  .operational-header__state > .operational-header__state-item {
+    display: flex;
+    min-width: 0;
     min-height: 34px;
+    padding: 5px 6px;
+    align-items: center;
+    justify-content: flex-start;
+    line-height: 1.25;
+    white-space: normal;
+    overflow-wrap: break-word;
   }
 
-  .operational-header__state > span:nth-child(4),
-  .operational-header__state > time {
+  .operational-header__state-item--mode {
+    grid-column: span 2;
+  }
+
+  .operational-header__state-item--session {
+    grid-column: span 4;
+  }
+
+  .operational-header__state-item--broker {
+    grid-column: span 6;
+  }
+
+  .operational-header__state-item--refresh {
+    grid-column: span 4;
+  }
+
+  .operational-header__state-item--risk {
+    grid-column: span 8;
+    white-space: normal;
+    overflow-wrap: break-word;
+  }
+
+  .operational-header__state > .operational-header__state-item--feed,
+  .operational-header__state > .operational-header__state-item--clock {
     display: none;
   }
 

@@ -28,6 +28,11 @@ export function formatPercent(value: number | null | undefined): string {
   return (value * 100).toFixed(0) + '%';
 }
 
+export function formatPercentagePoints(value: number | null | undefined): string {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return 'Not recorded';
+  return value.toLocaleString('en-US', { maximumFractionDigits: 2 }) + '%';
+}
+
 export function sentenceCase(value: string): string {
   const spaced = value.replace(/[_-]+/g, ' ').trim();
   return spaced === '' ? 'Not recorded' : spaced[0].toUpperCase() + spaced.slice(1);

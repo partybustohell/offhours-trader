@@ -317,15 +317,15 @@ export function ConfigurationView({
 
           <Group title="Risk limits">
             {([
-              ['max_position_pct', 'Maximum position fraction', '0.01'],
-              ['max_daily_deploy_pct', 'Maximum daily deployment fraction', '0.01'],
+              ['max_position_pct', 'Maximum position percentage', '0.01'],
+              ['max_daily_deploy_pct', 'Maximum daily deployment percentage', '0.01'],
               ['max_order_notional_usd', 'Maximum order notional (USD)', '100'],
               ['max_spread_bps', 'Maximum spread (bps)', '1'],
-              ['max_chase_pct', 'Maximum chase fraction', '0.01'],
-              ['max_drop_pct', 'Maximum drop fraction', '0.01'],
-              ['target_vol_pct', 'Target volatility fraction', '0.01'],
-              ['max_position_loss_pct', 'Maximum position loss fraction', '0.01'],
-              ['daily_loss_halt_pct', 'Daily loss halt fraction', '0.01'],
+              ['max_chase_pct', 'Maximum chase percentage', '0.01'],
+              ['max_drop_pct', 'Maximum drop percentage', '0.01'],
+              ['target_vol_pct', 'Target volatility percentage', '0.01'],
+              ['max_position_loss_pct', 'Maximum position loss percentage', '0.01'],
+              ['daily_loss_halt_pct', 'Daily loss halt percentage', '0.01'],
             ] as const).map(([name, label, step]) => (
               <NumberField
                 key={name}

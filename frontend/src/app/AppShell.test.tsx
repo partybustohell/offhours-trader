@@ -164,6 +164,50 @@ describe('AppShellView', () => {
     );
   });
 
+  it.each([
+    {
+      name: 'regular session',
+      data: {
+        status: { ...statusFixture, session: 'rth' as const },
+        thesis: offhoursPlanFixture,
+        thesisRth: null,
+      },
+    },
+    {
+      name: 'after-hours session',
+      data: {
+        status: { ...statusFixture, session: 'afterhours' as const },
+        thesis: null,
+        thesisRth: rthPlanFixture,
+      },
+    },
+    {
+      name: 'closed session',
+      data: {
+        status: { ...statusFixture, session: 'closed' as const },
+        thesis: offhoursPlanFixture,
+        thesisRth: rthPlanFixture,
+      },
+    },
+    {
+      name: 'unknown session',
+      data: {
+        status: { ...statusFixture, session: null },
+        thesis: offhoursPlanFixture,
+        thesisRth: rthPlanFixture,
+      },
+    },
+  ])('does not substitute an opposite-session plan during $name', ({ data }) => {
+    render(
+      <AppShellView
+        controller={controller({ data })}
+        saveConfig={saveResult()}
+      />,
+    );
+
+    expect(screen.getByText('No trading plan is available.')).toBeVisible();
+  });
+
   it('keeps the supported configuration save wired through the shell', async () => {
     const user = userEvent.setup();
     const save = saveResult();

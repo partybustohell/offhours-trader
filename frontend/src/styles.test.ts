@@ -65,6 +65,33 @@ describe('operator terminal stylesheet contract', () => {
     );
   });
 
+  it('fits the complete mobile safety strip into a twelve-column grid without horizontal scrolling', () => {
+    const mobileStart = styles.indexOf('@media (max-width: 899px)');
+    const mobileStyles = styles.slice(mobileStart);
+    const spanFor = (slot: string) => {
+      const match = mobileStyles.match(
+        new RegExp(
+          `\\.operational-header__state-item--${slot}\\s*\\{[^}]*grid-column:\\s*span\\s+(\\d+)`,
+          's',
+        ),
+      );
+      return Number(match?.[1] ?? 0);
+    };
+
+    expect(mobileStyles).toMatch(
+      /\.operational-header__state\s*\{[^}]*display:\s*grid[^}]*grid-template-columns:\s*repeat\(12,\s*minmax\(0,\s*1fr\)\)[^}]*overflow-x:\s*hidden/s,
+    );
+    expect(spanFor('mode') + spanFor('session') + spanFor('broker')).toBe(12);
+    expect(spanFor('refresh') + spanFor('risk')).toBe(12);
+    expect(spanFor('risk')).toBeGreaterThan(spanFor('refresh'));
+    expect(mobileStyles).toMatch(
+      /\.operational-header__state-item--risk\s*\{[^}]*white-space:\s*normal[^}]*overflow-wrap:\s*break-word/s,
+    );
+    expect(mobileStyles).toMatch(
+      /\.operational-header__state\s*>\s*\.operational-header__state-item--feed,\s*\.operational-header__state\s*>\s*\.operational-header__state-item--clock\s*\{[^}]*display:\s*none/s,
+    );
+  });
+
   it('keeps long table identifiers readable inside local horizontal overflow', () => {
     expect(styles).toMatch(
       /\.data-table-wrap\s*\{[^}]*overflow-x:\s*auto/s,

@@ -31,21 +31,40 @@ function plurality(verdicts: readonly Verdict[]): Direction {
   return long > short ? 'long' : 'short';
 }
 
+function recordedDate(value: string | undefined): string | null {
+  const date = value?.trim();
+  return date ? date : null;
+}
+
 export function buildCandidateDecisionRows(input: {
   candidates: CandidateFile | null;
   verdicts: VerdictFile | null;
   plan: Thesis | null;
   config: Config | null;
 }): CandidateDecisionRow[] {
-  const symbols = new Set(input.candidates?.candidates.map((item) => item.ticker) ?? []);
-  input.verdicts?.verdicts.forEach((verdict) => symbols.add(verdict.ticker));
-  input.plan?.entries.forEach((entry) => symbols.add(entry.ticker));
-  input.plan?.skipped.forEach((entry) => symbols.add(entry.ticker));
+  const decisionDate = recordedDate(input.candidates?.date)
+    ?? recordedDate(input.plan?.date)
+    ?? recordedDate(input.verdicts?.date);
+  if (decisionDate === null) return [];
+
+  const candidates = recordedDate(input.candidates?.date) === decisionDate
+    ? input.candidates
+    : null;
+  const verdictFile = recordedDate(input.verdicts?.date) === decisionDate
+    ? input.verdicts
+    : null;
+  const plan = recordedDate(input.plan?.date) === decisionDate
+    ? input.plan
+    : null;
+  const symbols = new Set(candidates?.candidates.map((item) => item.ticker) ?? []);
+  verdictFile?.verdicts.forEach((verdict) => symbols.add(verdict.ticker));
+  plan?.entries.forEach((entry) => symbols.add(entry.ticker));
+  plan?.skipped.forEach((entry) => symbols.add(entry.ticker));
 
   return [...symbols].sort().map((symbol) => {
-    const verdicts = input.verdicts?.verdicts.filter((item) => item.ticker === symbol) ?? [];
-    const entry = input.plan?.entries.find((item) => item.ticker === symbol) ?? null;
-    const skipped = input.plan?.skipped.find((item) => item.ticker === symbol) ?? null;
+    const verdicts = verdictFile?.verdicts.filter((item) => item.ticker === symbol) ?? [];
+    const entry = plan?.entries.find((item) => item.ticker === symbol) ?? null;
+    const skipped = plan?.skipped.find((item) => item.ticker === symbol) ?? null;
     const panelPosition = entry?.direction ?? plurality(verdicts);
     const agreeing = panelPosition === 'none'
       ? 0

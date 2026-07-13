@@ -37,10 +37,12 @@ describe('ResearchView', () => {
   it('keeps one selected symbol across candidate and analyst information', async () => {
     render(<ResearchView {...props} />);
     await userEvent.click(screen.getByRole('row', { name: 'Inspect WBD research' }));
-    expect(screen.getByRole('region', { name: 'Research detail' })).toHaveTextContent('WBD');
-    expect(screen.getByRole('region', { name: 'Research detail' })).toHaveTextContent(
-      '1 of 2 required analysts agreed.',
-    );
+    const detail = screen.getByRole('region', { name: 'Research detail' });
+    expect(detail).toHaveTextContent('WBD');
+    expect(detail).not.toHaveTextContent('1 of 2 required analysts agreed.');
+    expect(
+      within(detail).getByText('Source', { selector: 'dt' }).nextElementSibling,
+    ).toHaveTextContent('Candidate selection');
     expect(screen.getByRole('table', { name: 'WBD analyst matrix' })).toBeVisible();
   });
 
@@ -97,6 +99,107 @@ describe('ResearchView', () => {
     expect(
       within(detail).getByText('Required analyst count', { selector: 'dt' }).nextElementSibling,
     ).toHaveTextContent(/^Not recorded$/);
+  });
+
+  it('does not attach yesterday plan or analyst evidence to a current candidate', () => {
+    const currentCandidates = { ...candidatesFixture, date: '2026-07-13' };
+    render(
+      <ResearchView
+        {...props}
+        candidates={currentCandidates}
+        verdicts={{ ...verdictsFixture, date: '2026-07-12' }}
+        offhoursPlan={{ ...offhoursPlanFixture, date: '2026-07-12' }}
+        rthPlan={{ ...rthPlanFixture, date: '2026-07-12' }}
+      />,
+    );
+
+    const detail = screen.getByRole('region', { name: 'Research detail' });
+    expect(detail).not.toHaveTextContent(
+      'Two recorded analyst views supported a long position.',
+    );
+    const matrix = within(detail).getByRole('table', { name: 'AMD analyst matrix' });
+    const fundamental = within(matrix).getByText('Fundamental').closest('tr');
+    expect(fundamental).not.toBeNull();
+    expect(within(fundamental!).queryByText('Long')).not.toBeInTheDocument();
+    expect(within(fundamental!).getAllByText('Not recorded')).not.toHaveLength(0);
+  });
+
+  it('selects from the active candidate rows instead of stale disjoint evidence', () => {
+    const currentCandidates = {
+      ...candidatesFixture,
+      date: '2026-07-13',
+      candidates: candidatesFixture.candidates.filter((item) => item.ticker === 'WBD'),
+    };
+    const staleVerdicts = {
+      ...verdictsFixture,
+      date: '2026-07-12',
+      verdicts: verdictsFixture.verdicts.filter((item) => item.ticker === 'AMD'),
+    };
+    render(
+      <ResearchView
+        {...props}
+        candidates={currentCandidates}
+        verdicts={staleVerdicts}
+        offhoursPlan={{ ...offhoursPlanFixture, date: '2026-07-12' }}
+        rthPlan={{ ...rthPlanFixture, date: '2026-07-12' }}
+      />,
+    );
+
+    expect(screen.getByRole('row', { name: 'Inspect WBD research' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    const detail = screen.getByRole('region', { name: 'Research detail' });
+    expect(detail).toHaveTextContent('WBD');
+    expect(detail).not.toHaveTextContent('AMD');
+    expect(
+      within(detail).getByText('Source', { selector: 'dt' }).nextElementSibling,
+    ).toHaveTextContent('Candidate selection');
+  });
+
+  it('reconciles independently refreshed evidence only after its decision date matches', async () => {
+    const currentCandidates = { ...candidatesFixture, date: '2026-07-13' };
+    const staleVerdicts = { ...verdictsFixture, date: '2026-07-12' };
+    const currentVerdicts = { ...verdictsFixture, date: '2026-07-13' };
+    const stalePlan = { ...offhoursPlanFixture, date: '2026-07-12' };
+    const currentPlan = { ...offhoursPlanFixture, date: '2026-07-13' };
+    const { rerender } = render(
+      <ResearchView
+        {...props}
+        candidates={currentCandidates}
+        verdicts={staleVerdicts}
+        offhoursPlan={stalePlan}
+      />,
+    );
+
+    let matrix = screen.getByRole('table', { name: 'AMD analyst matrix' });
+    expect(within(matrix).queryByText('Long')).not.toBeInTheDocument();
+
+    rerender(
+      <ResearchView
+        {...props}
+        candidates={currentCandidates}
+        verdicts={currentVerdicts}
+        offhoursPlan={stalePlan}
+      />,
+    );
+    matrix = screen.getByRole('table', { name: 'AMD analyst matrix' });
+    expect(within(matrix).getAllByText('Long')).toHaveLength(2);
+    expect(screen.queryByText('Two recorded analyst views supported a long position.'))
+      .not.toBeInTheDocument();
+
+    rerender(
+      <ResearchView
+        {...props}
+        candidates={currentCandidates}
+        verdicts={currentVerdicts}
+        offhoursPlan={currentPlan}
+      />,
+    );
+    await userEvent.click(screen.getByRole('tab', { name: 'Off-hours plan' }));
+    expect(screen.getByText('Two recorded analyst views supported a long position.')).toBeVisible();
+    matrix = screen.getByRole('table', { name: 'AMD analyst matrix' });
+    expect(within(matrix).getAllByText('Long')).toHaveLength(2);
   });
 
   it('labels blank nomination and analyst evidence as not recorded', () => {
@@ -229,6 +332,63 @@ describe('ResearchView', () => {
     }
   });
 
+  it('keeps filtered and session-plan reasons in their exact mobile source context', async () => {
+    setViewport(390, 844);
+    const user = userEvent.setup();
+    const offhoursReason = 'Off-hours agreement requirement was not met.';
+    const rthReason = 'Regular-session liquidity requirement was not met.';
+    const offhoursPlan = {
+      ...offhoursPlanFixture,
+      skipped: [...offhoursPlanFixture.skipped, { ticker: 'GME', reason: offhoursReason }],
+    };
+    const rthPlan = {
+      ...rthPlanFixture,
+      skipped: [...rthPlanFixture.skipped, { ticker: 'GME', reason: rthReason }],
+    };
+    render(
+      <ResearchView
+        {...props}
+        offhoursPlan={offhoursPlan}
+        rthPlan={rthPlan}
+      />,
+    );
+
+    await user.click(screen.getByRole('tab', { name: 'Filtered out' }));
+    await user.click(screen.getByRole('row', { name: 'Inspect GME research' }));
+    let detail = screen.getByRole('region', { name: 'Research detail' });
+    expect(detail).toHaveTextContent('Filtered out — Excluded by universe configuration.');
+    expect(within(detail).queryByText(offhoursReason)).not.toBeInTheDocument();
+    expect(within(detail).queryByText(rthReason)).not.toBeInTheDocument();
+    expect(
+      within(detail).getByText('Source', { selector: 'dt' }).nextElementSibling,
+    ).toHaveTextContent('Filtered out');
+    await user.click(screen.getByRole('button', { name: 'Back to filtered out' }));
+
+    for (const context of [
+      {
+        tab: 'Off-hours plan',
+        back: 'Back to off-hours plan',
+        reason: offhoursReason,
+        source: 'Off-hours',
+      },
+      {
+        tab: 'Regular-session plan',
+        back: 'Back to regular-session plan',
+        reason: rthReason,
+        source: 'Regular session',
+      },
+    ]) {
+      await user.click(screen.getByRole('tab', { name: context.tab }));
+      await user.click(screen.getByRole('row', { name: 'Inspect GME research' }));
+      detail = screen.getByRole('region', { name: 'Research detail' });
+      expect(detail).toHaveTextContent(context.reason);
+      expect(
+        within(detail).getByText('Trading plan', { selector: 'dt' }).nextElementSibling,
+      ).toHaveTextContent(context.source);
+      await user.click(screen.getByRole('button', { name: context.back }));
+    }
+  });
+
   it('uses the active mobile list in the visible Back label', async () => {
     setViewport(390, 844);
     const user = userEvent.setup();
@@ -252,7 +412,7 @@ describe('ResearchView', () => {
     }
   });
 
-  it('filters trim-empty invalidation conditions and reports when none remain', () => {
+  it('filters trim-empty invalidation conditions and reports when none remain', async () => {
     const withOneInvalidation = {
       ...offhoursPlanFixture,
       entries: offhoursPlanFixture.entries.map((entry) => ({
@@ -263,6 +423,7 @@ describe('ResearchView', () => {
     const { rerender } = render(
       <ResearchView {...props} offhoursPlan={withOneInvalidation} />,
     );
+    await userEvent.click(screen.getByRole('tab', { name: 'Off-hours plan' }));
 
     let invalidations = screen
       .getByRole('heading', { name: 'Invalidation conditions' })

@@ -75,6 +75,19 @@ function requiredAnalystCount(config: Config | null): string {
     : 'Not recorded';
 }
 
+function recordedDate(value: string | undefined): string | null {
+  const date = value?.trim();
+  return date ? date : null;
+}
+
+function matchesDecisionDate(value: string | undefined, decisionDate: string | null): boolean {
+  return decisionDate !== null && recordedDate(value) === decisionDate;
+}
+
+function planForKind(plan: Thesis | null, kind: Thesis['kind']): Thesis | null {
+  return plan?.kind === kind ? plan : null;
+}
+
 function planRows(plan: Thesis | null): PlanResearchSymbol[] {
   const rows = new Map<string, PlanResearchSymbol>();
   plan?.entries.forEach((item) => {
@@ -96,17 +109,21 @@ export function ResearchView({
   config,
 }: ResearchViewProps) {
   const [tab, setTab] = useState('candidates');
+  const offhoursSource = planForKind(offhoursPlan, 'offhours');
+  const rthSource = planForKind(rthPlan, 'rth');
   const symbols = useMemo(() => {
     const values = new Set<string>();
-    candidates?.candidates.forEach((item) => values.add(item.ticker));
-    candidates?.rejected.forEach((item) => values.add(item.ticker));
-    verdicts?.verdicts.forEach((item) => values.add(item.ticker));
-    offhoursPlan?.entries.forEach((item) => values.add(item.ticker));
-    offhoursPlan?.skipped.forEach((item) => values.add(item.ticker));
-    rthPlan?.entries.forEach((item) => values.add(item.ticker));
-    rthPlan?.skipped.forEach((item) => values.add(item.ticker));
+    if (tab === 'candidates') {
+      candidates?.candidates.forEach((item) => values.add(item.ticker));
+    } else if (tab === 'filtered') {
+      candidates?.rejected.forEach((item) => values.add(item.ticker));
+    } else {
+      const plan = tab === 'rth' ? rthSource : offhoursSource;
+      plan?.entries.forEach((item) => values.add(item.ticker));
+      plan?.skipped.forEach((item) => values.add(item.ticker));
+    }
     return [...values].sort().map((symbol) => ({ symbol }));
-  }, [candidates, offhoursPlan, rthPlan, verdicts]);
+  }, [candidates, offhoursSource, rthSource, tab]);
   const selection = useLinkedSelection(symbols, symbolKey);
   const selected = selection.selectedItem?.symbol ?? null;
 
@@ -115,8 +132,8 @@ export function ResearchView({
     symbol: item.ticker,
     reason: item.reason,
   })) ?? [];
-  const offhoursRows = planRows(offhoursPlan);
-  const rthRows = planRows(rthPlan);
+  const offhoursRows = planRows(offhoursSource);
+  const rthRows = planRows(rthSource);
   const planColumns: DataColumn<PlanResearchSymbol>[] = [
     { id: 'symbol', header: 'Symbol', cell: (row) => row.symbol },
     {
@@ -225,14 +242,30 @@ export function ResearchView({
     </Pane>
   );
 
-  const selectedViews = verdicts?.verdicts.filter((item) => item.ticker === selected) ?? [];
-  const selectedCandidate =
-    candidates?.candidates.find((item) => item.ticker === selected) ?? null;
   const selectedPlan = tab === 'rth'
-    ? rthPlan
+    ? rthSource
     : tab === 'offhours'
-      ? offhoursPlan
-      : offhoursPlan ?? rthPlan;
+      ? offhoursSource
+      : null;
+  const decisionDate = tab === 'candidates' || tab === 'filtered'
+    ? recordedDate(candidates?.date)
+    : recordedDate(selectedPlan?.date);
+  const compatibleCandidates = matchesDecisionDate(candidates?.date, decisionDate)
+    ? candidates
+    : null;
+  const compatibleVerdicts = matchesDecisionDate(verdicts?.date, decisionDate)
+    ? verdicts
+    : null;
+  const selectedViews = compatibleVerdicts?.verdicts.filter(
+    (item) => item.ticker === selected,
+  ) ?? [];
+  const selectedCandidate = tab === 'filtered'
+    ? null
+    : (tab === 'candidates' ? candidates : compatibleCandidates)
+      ?.candidates.find((item) => item.ticker === selected) ?? null;
+  const selectedRejection = tab === 'filtered'
+    ? candidates?.rejected.find((item) => item.ticker === selected) ?? null
+    : null;
   const selectedEntry =
     selectedPlan?.entries.find((item) => item.ticker === selected) ?? null;
   const skipped =
@@ -300,6 +333,29 @@ export function ResearchView({
                 <div><dt>Target notional</dt><dd>{formatUsd(selectedEntry.targetNotionalUsd)}</dd></div>
               </dl>
             </>
+          ) : tab === 'filtered' ? (
+            <>
+              <p>
+                {selectedRejection
+                  ? 'Filtered out — ' + recordedText(selectedRejection.reason)
+                  : 'No filtered-out record for ' + selected + ' in this candidate file.'}
+              </p>
+              <dl className="definition-rows">
+                <div><dt>Source</dt><dd>Filtered out</dd></div>
+              </dl>
+            </>
+          ) : tab === 'candidates' ? (
+            <>
+              <p>Trading-plan outcomes are shown in the session plan tabs.</p>
+              <dl className="definition-rows">
+                <div><dt>Source</dt><dd>Candidate selection</dd></div>
+                <div>
+                  <dt>Required analyst count</dt>
+                  <dd>{requiredAnalystCount(config)}</dd>
+                </div>
+                <div><dt>Confidence</dt><dd>Not recorded</dd></div>
+              </dl>
+            </>
           ) : (
             <>
               <p>
@@ -307,6 +363,10 @@ export function ResearchView({
                 {skipped ? recordedText(skipped.reason) : 'A reason was not recorded.'}
               </p>
               <dl className="definition-rows">
+                <div>
+                  <dt>Trading plan</dt>
+                  <dd>{tab === 'rth' ? 'Regular session' : 'Off-hours'}</dd>
+                </div>
                 <div>
                   <dt>Required analyst count</dt>
                   <dd>{requiredAnalystCount(config)}</dd>

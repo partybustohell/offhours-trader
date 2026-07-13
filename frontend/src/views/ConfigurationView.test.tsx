@@ -147,6 +147,38 @@ describe('ConfigurationView', () => {
     }
   });
 
+  it('labels backend percentage-point risk values as percentages', () => {
+    render(
+      <ConfigurationView
+        config={{
+          ...configFixture,
+          max_position_pct: 5,
+          max_daily_deploy_pct: 10,
+          max_chase_pct: 1,
+          max_drop_pct: 3,
+          target_vol_pct: 40,
+          max_position_loss_pct: 8,
+          daily_loss_halt_pct: 3,
+        }}
+        onSave={vi.fn()}
+      />,
+    );
+
+    for (const [label, value] of [
+      ['Maximum position percentage', 5],
+      ['Maximum daily deployment percentage', 10],
+      ['Maximum chase percentage', 1],
+      ['Maximum drop percentage', 3],
+      ['Target volatility percentage', 40],
+      ['Maximum position loss percentage', 8],
+      ['Daily loss halt percentage', 3],
+    ] as const) {
+      expect(screen.getByLabelText(label)).toHaveValue(value);
+    }
+    expect(screen.queryByText(/fraction/i)).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Confidence threshold')).toHaveValue(0.7);
+  });
+
   it('locks every editable control while a save is pending', async () => {
     const user = userEvent.setup();
     const saved = { ...configFixture, conviction_threshold: 0.82 };

@@ -128,46 +128,75 @@ export function OperationalHeader({
         </button>
       </div>
       <div className="operational-header__state" aria-label="Operational state">
-        <span>{modeText(state.mode)}</span>
-        <SemanticText tone={state.session === 'closed' ? 'warning' : 'neutral'}>
-          {sessionText(state.session)}
-        </SemanticText>
-        <SemanticText tone={
-          state.broker === 'connected'
-            ? 'positive'
-            : state.broker === 'unavailable'
+        <span
+          className="operational-header__state-item operational-header__state-item--mode"
+          data-status-slot="mode"
+        >
+          {modeText(state.mode)}
+        </span>
+        <span
+          className="operational-header__state-item operational-header__state-item--session"
+          data-status-slot="session"
+        >
+          <SemanticText tone={state.session === 'closed' ? 'warning' : 'neutral'}>
+            {sessionText(state.session)}
+          </SemanticText>
+        </span>
+        <span
+          className="operational-header__state-item operational-header__state-item--broker"
+          data-status-slot="broker"
+        >
+          <SemanticText tone={
+            state.broker === 'connected'
+              ? 'positive'
+              : state.broker === 'unavailable'
+                ? 'negative'
+                : state.broker === 'missing-credentials' || state.broker === 'stale'
+                  ? 'warning'
+                  : 'neutral'
+          }>
+            {brokerText(state.broker)}
+          </SemanticText>
+        </span>
+        <span className="operational-header__state-item operational-header__state-item--feed">
+          {state.dataFeed ? state.dataFeed.toUpperCase() + ' feed' : 'Feed unknown'}
+        </span>
+        <span
+          className="operational-header__state-item operational-header__state-item--refresh"
+          data-status-slot="refresh"
+        >
+          <SemanticText tone={
+            state.polling.connectivity === 'offline'
               ? 'negative'
-              : state.broker === 'missing-credentials' || state.broker === 'stale'
+              : resourceProblem || state.polling.initialLoading
                 ? 'warning'
-                : 'neutral'
-        }>
-          {brokerText(state.broker)}
-        </SemanticText>
-        <span>{state.dataFeed ? state.dataFeed.toUpperCase() + ' feed' : 'Feed unknown'}</span>
-        <SemanticText tone={
-          state.polling.connectivity === 'offline'
-            ? 'negative'
-            : resourceProblem || state.polling.initialLoading
-              ? 'warning'
-              : 'positive'
-        }>
-          {refreshState}
-        </SemanticText>
-        <SemanticText tone={
-          state.halt === null
-            ? 'neutral'
-            : halted
-              ? 'negative'
-              : 'positive'
-        }>
-          {state.halt === null
-            ? 'Risk state unknown'
-            : halted
-              ? 'Halted — ' + (state.halt.reason || 'Reason not recorded')
-                + (state.halt.at ? ', ' + formatEtTimestamp(state.halt.at) : '')
-              : 'Risk clear'}
-        </SemanticText>
-        <time>{etClock}</time>
+                : 'positive'
+          }>
+            {refreshState}
+          </SemanticText>
+        </span>
+        <span
+          className="operational-header__state-item operational-header__state-item--risk"
+          data-status-slot="risk"
+        >
+          <SemanticText tone={
+            state.halt === null
+              ? 'neutral'
+              : halted
+                ? 'negative'
+                : 'positive'
+          }>
+            {state.halt === null
+              ? 'Risk state unknown'
+              : halted
+                ? 'Halted — ' + (state.halt.reason || 'Reason not recorded')
+                  + (state.halt.at ? ', ' + formatEtTimestamp(state.halt.at) : '')
+                : 'Risk clear'}
+          </SemanticText>
+        </span>
+        <time className="operational-header__state-item operational-header__state-item--clock">
+          {etClock}
+        </time>
       </div>
       <div className="operational-header__actions">
         <ActionControl
