@@ -4,7 +4,7 @@ import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { loadConfig, saveConfig } from './config.js';
-import { currentSession, nowET } from './clock.js';
+import { currentSession, nowET, thesisKindForSession } from './clock.js';
 import { appendAudit, readAuditTail } from './audit.js';
 import { readHaltState, writeHalt, clearHalt } from './state.js';
 import { candidatesPath, verdictsPath, thesisPath, readJsonIfExists } from './paths.js';
@@ -56,7 +56,12 @@ function startRun(kind: RunKind, res: Response): void {
     res.status(409).json({ error: 'already running' });
     return;
   }
-  const child = spawn('pnpm', ['tsx', RUN_SCRIPTS[kind]], {
+  // A pipeline run must produce the thesis kind the executor will consume for
+  // the current session, or the plan is stranded (see thesisKindForSession).
+  // The executor tick takes no session argument.
+  const sessionArgs =
+    kind === 'pipeline' && thesisKindForSession(currentSession()) === 'rth' ? ['rth'] : [];
+  const child = spawn('pnpm', ['tsx', RUN_SCRIPTS[kind], ...sessionArgs], {
     cwd: ROOT,
     detached: true,
     stdio: 'ignore',

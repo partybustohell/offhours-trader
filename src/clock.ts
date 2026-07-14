@@ -1,4 +1,4 @@
-import type { Session } from './types.js';
+import type { Session, ThesisKind } from './types.js';
 import type { Config } from './config.js';
 
 const DOW_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -36,6 +36,16 @@ export function currentSession(d = new Date()): Session {
   if (minutes >= 570 && minutes < 960) return 'rth'; // 09:30–16:00
   if (minutes >= 960 && minutes < 1200) return 'afterhours'; // 16:00–20:00
   return 'closed';
+}
+
+// The thesis kind a producer should write for a given session, kept identical
+// to the executor's consumer-side mapping (executor-loop.ts): the regular
+// session trades its own same-morning `rth` thesis; pre/after-market and closed
+// use the evening `offhours` thesis. A producer that ignores the session (e.g.
+// the dashboard "Run analysis" trigger) writes an offhours thesis the RTH
+// executor never reads, stranding the entry.
+export function thesisKindForSession(session: Session): ThesisKind {
+  return session === 'rth' ? 'rth' : 'offhours';
 }
 
 export function sessionEnabled(s: Session, cfg: Config): boolean {

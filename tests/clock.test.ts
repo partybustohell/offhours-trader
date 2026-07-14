@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { nowET, currentSession, sessionEnabled } from '../src/clock.js';
+import { nowET, currentSession, sessionEnabled, thesisKindForSession } from '../src/clock.js';
 import { ConfigSchema } from '../src/config.js';
 
 // July fixtures are EDT (UTC-4); January fixtures are EST (UTC-5).
@@ -94,5 +94,23 @@ describe('sessionEnabled', () => {
     expect(sessionEnabled('rth', on)).toBe(true);
     const off = ConfigSchema.parse({ sessions: { regularhours: false } });
     expect(sessionEnabled('rth', off)).toBe(false);
+  });
+});
+
+describe('thesisKindForSession', () => {
+  // Regression guard: the dashboard "Run analysis" trigger must produce a
+  // thesis of the kind the executor actually consumes for the current session.
+  // During RTH the executor loads ONLY the 'rth' thesis and never falls back to
+  // offhours (executor-loop.ts). If analysis run during RTH produces an
+  // 'offhours' thesis, the qualifying entry is stranded and never executes.
+  // This mapping must stay identical to the executor's session->kind logic.
+  it('maps the regular session to the rth thesis kind', () => {
+    expect(thesisKindForSession('rth')).toBe('rth');
+  });
+
+  it('maps extended-hours and closed sessions to the offhours thesis kind', () => {
+    expect(thesisKindForSession('premarket')).toBe('offhours');
+    expect(thesisKindForSession('afterhours')).toBe('offhours');
+    expect(thesisKindForSession('closed')).toBe('offhours');
   });
 });
