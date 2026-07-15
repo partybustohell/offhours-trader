@@ -458,6 +458,21 @@ describe('computeThesisEntries — P1–P3 signals (opt-in, down-only / gate)', 
   });
 });
 
+describe('computeThesisEntries: dominant horizon', () => {
+  it('carries the majority horizon of the agreeing verdicts onto the entry', () => {
+    const cfg = ConfigSchema.parse({ conviction_threshold: 0.5, quorum: 2, min_agreeing: 2 });
+    const verdicts: Verdict[] = [
+      { analyst: 'fundamental', ticker: 'GS', direction: 'long', conviction: 0.9, horizon: 'weeks', evidence: [], invalidation_conditions: [] },
+      { analyst: 'sentiment', ticker: 'GS', direction: 'long', conviction: 0.9, horizon: 'weeks', evidence: [], invalidation_conditions: [] },
+      { analyst: 'technical', ticker: 'GS', direction: 'long', conviction: 0.8, horizon: 'days', evidence: [], invalidation_conditions: [] },
+    ];
+    const marketInfo = new Map([['GS', { lastPrice: 100, avgDollarVolume20d: 5e7 }]]);
+    const account = { equity: 100000, cash: 100000, positions: [] };
+    const { entries } = computeThesisEntries(verdicts, marketInfo, account, cfg);
+    expect(entries[0]?.horizon).toBe('weeks');
+  });
+});
+
 describe('thesisExpiry', () => {
   it('summer Friday expires Monday 20:00 EDT (UTC-4)', () => {
     // 2026-07-10 is a Friday; next weekday is Mon 2026-07-13.

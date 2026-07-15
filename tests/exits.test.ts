@@ -330,4 +330,24 @@ describe('mergedExitPlan', () => {
     expect(mergedExitPlan({ direction: 'long', horizon: 'days' }, { hardStopPct: 20 }, cfg).hardStopPct).toBe(8);
     expect(mergedExitPlan({ direction: 'long', horizon: 'days' }, { hardStopPct: 4 }, cfg).hardStopPct).toBe(4);
   });
+
+  it('composes with sanitizeExitPlan output the way the pipeline does', () => {
+    const raw = {
+      hard_stop_pct: 30, // valid to sanitize (<=50) but above the 8% cap -> clamped at merge
+      invalidation_price: 96,
+      target_price: 130,
+      trail: { activate_pct: 6, trail_pct: 2 },
+      time_stop_hours: 72,
+      junk_field: 'ignored',
+    };
+    const llm = sanitizeExitPlan(raw, 'long', { low: 97, high: 101 });
+    const merged = mergedExitPlan({ direction: 'long', horizon: 'days' }, llm, cfg);
+    expect(merged).toEqual({
+      hardStopPct: 8, // clamped to max_position_loss_pct
+      invalidationPrice: 96,
+      target: 130,
+      trail: { activatePct: 6, trailPct: 2 },
+      timeStopHours: 72,
+    });
+  });
 });

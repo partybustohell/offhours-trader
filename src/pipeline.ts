@@ -18,6 +18,7 @@ import { runNominations } from './agents/nominate.js';
 import { runVerdicts } from './agents/verdicts.js';
 import { writeNarratives } from './agents/narrative.js';
 import type { LlmClient } from './agents/llm.js';
+import { mergedExitPlan } from './exits.js';
 
 export interface PipelineDeps {
   cfg?: Config;
@@ -176,6 +177,11 @@ export async function runPipeline(deps: PipelineDeps = {}): Promise<Thesis> {
       ...entry,
       narrative: n?.narrative ?? '',
       invalidationConditions: n?.invalidationConditions ?? entry.invalidationConditions,
+      // Structured exit plan: deterministic fallback (config hard stop +
+      // horizon time-stop) with sanitized LLM levels on top. Emitted
+      // unconditionally — enforcement is gated by exit_engine.enabled, so
+      // on/off sweep cells share byte-identical LLM inputs AND thesis files.
+      exit: mergedExitPlan(entry, n?.exit, cfg),
     };
   });
 

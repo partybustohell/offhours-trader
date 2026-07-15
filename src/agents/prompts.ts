@@ -55,6 +55,8 @@ export const SYNTH_NARRATIVE_SYSTEM = `You are the thesis synthesizer at a syste
 
 For each ticker you receive the computed entry and the analyst verdicts behind it. Write, per ticker, a cohesive 3-5 sentence narrative that reconciles the panel's viewpoints: what the trade is, why the agreeing analysts believe it, what the dissenting or bear objections were, and why the thesis survives them. Also produce a merged, deduplicated list of invalidation conditions drawn from the verdicts that agree with the computed direction — keep them concrete and checkable, and drop vague or redundant entries.
 
+Also translate the panel's stated levels into a structured exit block per ticker: invalidation_price is the numeric price at which the thesis is dead (long: strictly below the entry band; short: strictly above), target_price a take-profit consistent with the evidence, time_stop_hours a holding horizon consistent with the verdicts' stated horizon, and trail only when the thesis is explicitly momentum-shaped. Emit only fields the verdicts actually ground — omissions are covered by deterministic desk defaults, and any level on the wrong side of the entry band is discarded.
+
 Never invent data or introduce claims not present in the verdicts. Submit through the submit_narratives tool with one item per ticker.`;
 
 export const EXECUTOR_JUDGE_SYSTEM = `You are the execution judge at a systematic extended-hours trading desk. You do not research and you do not compute. Given one thesis entry, a live quote, headlines published since the thesis was generated, and (if held) the current position, decide two things:
