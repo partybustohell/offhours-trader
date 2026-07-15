@@ -81,3 +81,45 @@ describe('halt round-trip', () => {
     expect(s.at).toBe('2026-07-06T21:00:00.000Z');
   });
 });
+
+describe('position peaks (exit-engine trailing state)', () => {
+  it('first observation creates the record with entryTimeMs = now', () => {
+    const rec = state.trackPositionPeak('FSLR', 'short', 222.1, 1000);
+    expect(rec).toEqual({ side: 'short', entryTimeMs: 1000, peak: 222.1 });
+  });
+
+  it('long peak ratchets up and never down', () => {
+    state.trackPositionPeak('GS', 'long', 100, 1000);
+    expect(state.trackPositionPeak('GS', 'long', 106, 2000).peak).toBe(106);
+    const rec = state.trackPositionPeak('GS', 'long', 103, 3000);
+    expect(rec.peak).toBe(106);
+    expect(rec.entryTimeMs).toBe(1000); // first-seen time is stable
+  });
+
+  it('short peak ratchets DOWN (favorable low-water mark)', () => {
+    state.trackPositionPeak('FSLR', 'short', 222, 1000);
+    expect(state.trackPositionPeak('FSLR', 'short', 218, 2000).peak).toBe(218);
+    expect(state.trackPositionPeak('FSLR', 'short', 220, 3000).peak).toBe(218);
+  });
+
+  it('a side flip resets the record (re-opened name starts fresh)', () => {
+    state.trackPositionPeak('GS', 'long', 100, 1000);
+    const rec = state.trackPositionPeak('GS', 'short', 98, 5000);
+    expect(rec).toEqual({ side: 'short', entryTimeMs: 5000, peak: 98 });
+  });
+
+  it('prunePositionPeaks clears closed positions only', () => {
+    state.trackPositionPeak('GS', 'long', 100, 1000);
+    state.trackPositionPeak('FSLR', 'short', 222, 1000);
+    state.prunePositionPeaks(['GS']);
+    expect(state.trackPositionPeak('GS', 'long', 99, 2000).entryTimeMs).toBe(1000);
+    // FSLR was pruned: re-observation starts a fresh record
+    expect(state.trackPositionPeak('FSLR', 'short', 222, 9000).entryTimeMs).toBe(9000);
+  });
+
+  it('a corrupt peaks file degrades to empty state, never throws', () => {
+    fs.mkdirSync(path.join(dir, 'out'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'out', 'position-peaks.json'), '{{{');
+    expect(state.trackPositionPeak('GS', 'long', 100, 1000).peak).toBe(100);
+  });
+});
