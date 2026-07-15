@@ -239,3 +239,26 @@ describe('assertModeRunnable', () => {
     expect(() => assertModeRunnable(ConfigSchema.parse({ mode: 'dry-run' }), {})).not.toThrow();
   });
 });
+
+describe('exit_engine config', () => {
+  it('defaults: enabled, no explicit stop overrides, conservative horizon hours', () => {
+    const cfg = ConfigSchema.parse({});
+    expect(cfg.exit_engine).toEqual({
+      enabled: true,
+      horizon_hours: { days: 30, weeks: 120 },
+    });
+  });
+
+  it('accepts explicit stop overrides and horizon hours', () => {
+    const cfg = ConfigSchema.parse({
+      exit_engine: { hard_stop_pct: 6, short_hard_stop_pct: 4, horizon_hours: { days: 12, weeks: 60 } },
+    });
+    expect(cfg.exit_engine.hard_stop_pct).toBe(6);
+    expect(cfg.exit_engine.short_hard_stop_pct).toBe(4);
+    expect(cfg.exit_engine.horizon_hours).toEqual({ days: 12, weeks: 60 });
+  });
+
+  it('rejects a non-positive hard stop', () => {
+    expect(() => ConfigSchema.parse({ exit_engine: { hard_stop_pct: 0 } })).toThrow();
+  });
+});

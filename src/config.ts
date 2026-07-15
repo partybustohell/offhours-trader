@@ -280,6 +280,25 @@ export const ConfigSchema = z.object({
       table: z.array(z.object({ score: z.number(), prob: z.number().min(0).max(1) })).default([]),
     })
     .default({}),
+  // Deterministic exit engine (guardrail, spec 2026-07-11). enabled=true enforces
+  // structured exit levels every tick; false reproduces the legacy static-stop +
+  // judge path byte-for-byte. hard_stop_pct absent -> falls back to
+  // max_position_loss_pct at resolve time, so defaults are a no-regression.
+  exit_engine: z
+    .object({
+      enabled: z.boolean().default(true),
+      hard_stop_pct: z.number().positive().optional(),
+      // Optional tighter stop for shorts; falls back to hard_stop_pct.
+      short_hard_stop_pct: z.number().positive().optional(),
+      // Fallback timeStopHours by verdict horizon (conservative; revisit on soak).
+      horizon_hours: z
+        .object({
+          days: z.number().positive().default(30),
+          weeks: z.number().positive().default(120),
+        })
+        .default({}),
+    })
+    .default({}),
   model: z
     .object({
       analysts: z.string().default('claude-sonnet-5'),
@@ -333,6 +352,7 @@ export function saveConfig(next: unknown, configPath: string = CONFIG_PATH): Con
     'execution',
     'risk_overlay',
     'calibration',
+    'exit_engine',
   ] as const) {
     if (patch[key] !== undefined) {
       if (patch[key] === null || typeof patch[key] !== 'object' || Array.isArray(patch[key])) {
