@@ -122,4 +122,29 @@ describe('position peaks (exit-engine trailing state)', () => {
     fs.writeFileSync(path.join(dir, 'out', 'position-peaks.json'), '{{{');
     expect(state.trackPositionPeak('GS', 'long', 100, 1000).peak).toBe(100);
   });
+
+  it('a zero or NaN mark never corrupts a short peak (no ratchet-to-zero fixed point)', () => {
+    state.trackPositionPeak('FSLR', 'short', 222, 1000);
+    expect(state.trackPositionPeak('FSLR', 'short', 0, 2000).peak).toBe(222);
+    expect(state.trackPositionPeak('FSLR', 'short', NaN, 3000).peak).toBe(222);
+    expect(state.trackPositionPeak('FSLR', 'short', 218, 4000).peak).toBe(218);
+  });
+
+  it('a bad first observation returns a transient un-armed record and persists nothing', () => {
+    const rec = state.trackPositionPeak('GS', 'long', 0, 1000);
+    expect(rec).toEqual({ side: 'long', entryTimeMs: 1000, peak: 0 });
+    // nothing was persisted: a later good mark starts the durable record fresh
+    expect(state.trackPositionPeak('GS', 'long', 100, 2000)).toEqual({ side: 'long', entryTimeMs: 2000, peak: 100 });
+  });
+
+  it('prune-all (flat account) clears every record without error', () => {
+    state.trackPositionPeak('GS', 'long', 100, 1000);
+    state.trackPositionPeak('FSLR', 'short', 222, 1000);
+    state.prunePositionPeaks([]);
+    expect(state.trackPositionPeak('GS', 'long', 99, 5000).entryTimeMs).toBe(5000);
+  });
+
+  it('prune with no peaks file is a no-op', () => {
+    expect(() => state.prunePositionPeaks(['GS'])).not.toThrow();
+  });
 });

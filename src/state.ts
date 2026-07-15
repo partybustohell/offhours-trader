@@ -88,6 +88,15 @@ export function trackPositionPeak(
   const peaks = readPeaks();
   const key = ticker.toUpperCase();
   const prev = peaks[key];
+  // Bad mark (zero-filled book side or NaN from a partial quote): never
+  // ratchet garbage into persisted state. Keep the last good same-side record
+  // if one exists; otherwise return a transient un-armed record WITHOUT
+  // persisting it — peak 0 fails evaluateExit's peak > 0 trail guard, so the
+  // trail simply stays dark until a real mark arrives.
+  if (!Number.isFinite(mark) || mark <= 0) {
+    if (prev && prev.side === side) return prev;
+    return { side, entryTimeMs: nowMs, peak: 0 };
+  }
   const rec: PositionPeak =
     prev && prev.side === side
       ? {
