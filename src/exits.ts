@@ -120,13 +120,17 @@ export function resolveExitPlan(
   entry: Pick<ThesisEntry, 'direction' | 'exit' | 'horizon'> | undefined,
   cfg: Config,
 ): ExitPlan {
-  const baseStop = cfg.exit_engine.hard_stop_pct ?? cfg.max_position_loss_pct;
-  if (!entry) return { hardStopPct: baseStop };
+  // Spec §4.2: max_position_loss_pct remains the hard floor — the engine may
+  // tighten the stop below it, never loosen past it. Clamp every resolved
+  // stop at the legacy cap regardless of source (config or entry-carried).
+  const cap = cfg.max_position_loss_pct;
+  const baseStop = cfg.exit_engine.hard_stop_pct ?? cap;
+  if (!entry) return { hardStopPct: Math.min(baseStop, cap) };
   const hardDefault =
     entry.direction === 'short' ? (cfg.exit_engine.short_hard_stop_pct ?? baseStop) : baseStop;
   const e = entry.exit;
   return {
-    hardStopPct: e?.hardStopPct ?? hardDefault,
+    hardStopPct: Math.min(e?.hardStopPct ?? hardDefault, cap),
     ...(e?.invalidationPrice !== undefined ? { invalidationPrice: e.invalidationPrice } : {}),
     ...(e?.target !== undefined ? { target: e.target } : {}),
     ...(e?.trail ? { trail: e.trail } : {}),
@@ -189,11 +193,17 @@ export function sanitizeExitPlan(
   return out;
 }
 
-/** Deterministic fallback filled first, then sanitized LLM fields on top. */
+/**
+ * Deterministic fallback filled first, then sanitized LLM fields on top.
+ * Re-clamped after the overlay (spec §4.2): an LLM stop may tighten but never
+ * loosen past max_position_loss_pct, so persisted thesis files never carry a
+ * looser stop than the engine would enforce.
+ */
 export function mergedExitPlan(
   entry: Pick<ThesisEntry, 'direction' | 'horizon'>,
   llm: Partial<ExitPlan> | undefined,
   cfg: Config,
 ): ExitPlan {
-  return { ...resolveExitPlan(entry, cfg), ...(llm ?? {}) };
+  const merged = { ...resolveExitPlan(entry, cfg), ...(llm ?? {}) };
+  return { ...merged, hardStopPct: Math.min(merged.hardStopPct, cfg.max_position_loss_pct) };
 }

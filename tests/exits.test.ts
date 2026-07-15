@@ -245,6 +245,13 @@ describe('resolveExitPlan', () => {
     );
     expect(plan).toEqual({ hardStopPct: 4, target: 120, timeStopHours: 10 });
   });
+
+  it('max_position_loss_pct remains the hard ceiling on any resolved stop', () => {
+    const c = ConfigSchema.parse({ exit_engine: { hard_stop_pct: 12 } }); // looser than the 8% legacy cap
+    expect(resolveExitPlan(undefined, c).hardStopPct).toBe(8);
+    expect(resolveExitPlan({ direction: 'long', exit: { hardStopPct: 20, timeStopHours: 10 } }, c).hardStopPct).toBe(8);
+    expect(resolveExitPlan({ direction: 'long', exit: { hardStopPct: 4, timeStopHours: 10 } }, c).hardStopPct).toBe(4);
+  });
 });
 
 describe('sanitizeExitPlan (LLM output validation)', () => {
@@ -317,5 +324,10 @@ describe('mergedExitPlan', () => {
       cfg,
     );
     expect(merged).toEqual({ hardStopPct: 8, timeStopHours: 30, invalidationPrice: 95 });
+  });
+
+  it('LLM hard stop can tighten but never loosen past max_position_loss_pct', () => {
+    expect(mergedExitPlan({ direction: 'long', horizon: 'days' }, { hardStopPct: 20 }, cfg).hardStopPct).toBe(8);
+    expect(mergedExitPlan({ direction: 'long', horizon: 'days' }, { hardStopPct: 4 }, cfg).hardStopPct).toBe(4);
   });
 });
