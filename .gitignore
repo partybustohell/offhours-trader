@@ -8,3 +8,4 @@ backtest-out/
 
 # remember system session logs (machine-local)
 .remember/
+.gstack/

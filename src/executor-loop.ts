@@ -142,6 +142,24 @@ export function positionLossPct(
   );
 }
 
+/**
+ * Live short-borrow gate — ports the backtest's checkShortable (an easy-to-borrow
+ * membership test) to the live executor. A short may proceed only on a name the
+ * broker reports as shortable, and — under strict mode — easy-to-borrow. A
+ * missing asset lookup (null) fails CLOSED: never short a name whose borrow
+ * availability could not be confirmed. Alpaca exposes no per-name borrow rate,
+ * so easy-to-borrow is the live proxy for the backtest's 0.3%/yr borrow model.
+ */
+export function shortEligibility(
+  info: { shortable: boolean; easyToBorrow: boolean } | null,
+  requireEasyToBorrow: boolean,
+): { ok: boolean; reason: string } {
+  if (!info) return { ok: false, reason: 'shortability unknown' };
+  if (!info.shortable) return { ok: false, reason: 'not shortable' };
+  if (requireEasyToBorrow && !info.easyToBorrow) return { ok: false, reason: 'not easy to borrow' };
+  return { ok: true, reason: '' };
+}
+
 export async function runTick(deps: TickDeps = {}): Promise<void> {
   const now = deps.now ?? new Date();
   const cfg = deps.cfg ?? loadConfig();
@@ -417,6 +435,16 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
     if (quote.last < entry.limitBand.low || quote.last > entry.limitBand.high) {
       skip(ticker, 'last price outside limit band');
       continue;
+    }
+    // Live short/borrow gate (ports backtest checkShortable). Runs before the
+    // judge so an ineligible short never costs an LLM call. Fails closed.
+    if (entry.direction === 'short' && cfg.execution.short_borrow_gate.enabled) {
+      const assetInfo = await broker.getAsset(ticker);
+      const elig = shortEligibility(assetInfo, cfg.execution.short_borrow_gate.require_easy_to_borrow);
+      if (!elig.ok) {
+        skip(ticker, elig.reason);
+        continue;
+      }
     }
     const decision = await judgeTick(cfg, { entry, quote, headlines: headlinesFor(ticker) }, deps.llm);
     if (!decision.proceed) {

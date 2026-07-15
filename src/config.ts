@@ -245,6 +245,16 @@ export const ConfigSchema = z.object({
           afterhours: z.object({ max_spread_bps: z.number().positive().default(80), max_quote_age_sec: z.number().positive().default(90), min_top_size: z.number().min(0).default(100) }).default({}),
         })
         .default({}),
+      // Live short/borrow gate — ports the backtest checkShortable. Fail-closed
+      // safety gate, default ON: a short proceeds only on a shortable and
+      // (strict) easy-to-borrow name. Alpaca exposes no borrow rate, so
+      // easy-to-borrow is the live proxy for the backtest's borrow-cost model.
+      short_borrow_gate: z
+        .object({
+          enabled: z.boolean().default(true),
+          require_easy_to_borrow: z.boolean().default(true),
+        })
+        .default({}),
     })
     .default({}),
   // Book-level live risk overlays (P2), evaluated in the executor tick.

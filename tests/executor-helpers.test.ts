@@ -4,6 +4,7 @@ import {
   partitionFreshQuotes,
   positionLossPct,
   seedDeployedTodayUsd,
+  shortEligibility,
 } from '../src/executor-loop.js';
 import type { QuoteSnapshot } from '../src/types.js';
 
@@ -137,5 +138,34 @@ describe('entryLimitPrice', () => {
     const b = { low: 97.111, high: 101.999 };
     expect(entryLimitPrice('long', { bid: 99, ask: 200 }, b)).toBeLessThanOrEqual(b.high);
     expect(entryLimitPrice('short', { bid: 0.5, ask: 100 }, b)).toBeGreaterThanOrEqual(b.low);
+  });
+});
+
+describe('shortEligibility (live short/borrow gate, ports backtest checkShortable)', () => {
+  it('allows a shortable, easy-to-borrow name under strict mode', () => {
+    expect(shortEligibility({ shortable: true, easyToBorrow: true }, true)).toEqual({ ok: true, reason: '' });
+  });
+
+  it('blocks a name that is not shortable', () => {
+    expect(shortEligibility({ shortable: false, easyToBorrow: false }, true)).toEqual({
+      ok: false,
+      reason: 'not shortable',
+    });
+  });
+
+  it('blocks a shortable but hard-to-borrow name when easy-to-borrow is required', () => {
+    expect(shortEligibility({ shortable: true, easyToBorrow: false }, true)).toEqual({
+      ok: false,
+      reason: 'not easy to borrow',
+    });
+  });
+
+  it('allows a shortable but hard-to-borrow name when easy-to-borrow is not required', () => {
+    expect(shortEligibility({ shortable: true, easyToBorrow: false }, false)).toEqual({ ok: true, reason: '' });
+  });
+
+  it('fails closed when the asset lookup returned nothing', () => {
+    expect(shortEligibility(null, true)).toEqual({ ok: false, reason: 'shortability unknown' });
+    expect(shortEligibility(null, false)).toEqual({ ok: false, reason: 'shortability unknown' });
   });
 });

@@ -530,6 +530,7 @@ export async function runEpisode(
     getOpenOrders: () => ledger.getOpenOrders(),
     getTodayOrders: () => ledger.getTodayOrders(),
     cancelOrdersFor: (t: string) => ledger.cancelOrdersFor(t),
+    getAsset: (t: string) => ledger.getAsset(t),
     placeLimitOrder: async (o: ProposedOrder) => {
       const [acct, openOrders, todayOrders, dailyPl] = await Promise.all([
         ledger.getAccount(),
