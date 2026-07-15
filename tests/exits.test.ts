@@ -114,6 +114,16 @@ describe('evaluateExit: target', () => {
     });
     expect(d.trigger).toBe('invalidation_price');
   });
+
+  it('target outranks trail when both are true', () => {
+    const d = evaluateExit({
+      ...base,
+      plan: { hardStopPct: 50, target: 103, trail: { activatePct: 5, trailPct: 2 } },
+      peakFavorablePrice: 106,
+      markPrice: 103.88, // satisfies target (>=103) and would satisfy trail retrace
+    });
+    expect(d.trigger).toBe('target');
+  });
 });
 
 describe('evaluateExit: trail', () => {
@@ -128,6 +138,16 @@ describe('evaluateExit: trail', () => {
     });
     expect(d.exit).toBe(true);
     expect(d.trigger).toBe('trail');
+  });
+
+  it('long: armed but not yet retraced enough — holds', () => {
+    const d = evaluateExit({
+      ...base,
+      plan: trailPlan,
+      peakFavorablePrice: 106, // +6% >= activate 5%, armed
+      markPrice: 105, // retrace (106-105)/106 = 0.94% < trailPct 2%
+    });
+    expect(d.exit).toBe(false);
   });
 
   it('long: not armed below the activation gain', () => {
@@ -150,6 +170,15 @@ describe('evaluateExit: trail', () => {
     });
     expect(d.exit).toBe(true);
     expect(d.trigger).toBe('trail');
+  });
+
+  it('short: not armed below the activation gain', () => {
+    const d = evaluateExit({
+      ...base, direction: 'short', plan: trailPlan,
+      peakFavorablePrice: 97, // 3% favorable move < 5% activate
+      markPrice: 96,
+    });
+    expect(d.exit).toBe(false);
   });
 });
 
