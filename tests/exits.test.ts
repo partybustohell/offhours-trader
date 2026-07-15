@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { evaluateExit, type ExitContext } from '../src/exits.js';
+import {
+  evaluateExit,
+  mergedExitPlan,
+  resolveExitPlan,
+  sanitizeExitPlan,
+  type ExitContext,
+} from '../src/exits.js';
+import { ConfigSchema } from '../src/config.js';
 
 const base: ExitContext = {
   direction: 'long',
@@ -204,5 +211,111 @@ describe('evaluateExit: time stop', () => {
 
   it('bare plan (hard stop only) never time-stops', () => {
     expect(evaluateExit({ ...base, nowMs: 10_000 * 3_600_000 }).exit).toBe(false);
+  });
+});
+
+const cfg = ConfigSchema.parse({});
+
+describe('resolveExitPlan', () => {
+  it('orphan (no entry): stop-only at the config hard stop, no time stop', () => {
+    expect(resolveExitPlan(undefined, cfg)).toEqual({ hardStopPct: 8 });
+  });
+
+  it('bare long entry: hard stop + days-horizon time stop (strict superset of today)', () => {
+    expect(resolveExitPlan({ direction: 'long' }, cfg)).toEqual({
+      hardStopPct: 8,
+      timeStopHours: 30,
+    });
+  });
+
+  it('weeks horizon uses the weeks fallback', () => {
+    expect(resolveExitPlan({ direction: 'long', horizon: 'weeks' }, cfg).timeStopHours).toBe(120);
+  });
+
+  it('short_hard_stop_pct tightens shorts only', () => {
+    const c = ConfigSchema.parse({ exit_engine: { short_hard_stop_pct: 5 } });
+    expect(resolveExitPlan({ direction: 'short' }, c).hardStopPct).toBe(5);
+    expect(resolveExitPlan({ direction: 'long' }, c).hardStopPct).toBe(8);
+  });
+
+  it('entry-carried exit fields override the fallbacks', () => {
+    const plan = resolveExitPlan(
+      { direction: 'long', exit: { hardStopPct: 4, target: 120, timeStopHours: 10 } },
+      cfg,
+    );
+    expect(plan).toEqual({ hardStopPct: 4, target: 120, timeStopHours: 10 });
+  });
+});
+
+describe('sanitizeExitPlan (LLM output validation)', () => {
+  const band = { low: 97, high: 101 }; // long entry band around ~100
+
+  it('maps snake_case fields and keeps well-formed values', () => {
+    expect(
+      sanitizeExitPlan(
+        {
+          hard_stop_pct: 6,
+          invalidation_price: 95,
+          target_price: 112,
+          trail: { activate_pct: 5, trail_pct: 2 },
+          time_stop_hours: 48,
+        },
+        'long',
+        band,
+      ),
+    ).toEqual({
+      hardStopPct: 6,
+      invalidationPrice: 95,
+      target: 112,
+      trail: { activatePct: 5, trailPct: 2 },
+      timeStopHours: 48,
+    });
+  });
+
+  it('drops a long invalidation level that is not below the band', () => {
+    expect(sanitizeExitPlan({ invalidation_price: 99 }, 'long', band)).toEqual({});
+  });
+
+  it('drops a long target that is not above the band', () => {
+    expect(sanitizeExitPlan({ target_price: 100 }, 'long', band)).toEqual({});
+  });
+
+  it('short: invalidation must sit above the band, target below', () => {
+    expect(
+      sanitizeExitPlan({ invalidation_price: 105, target_price: 90 }, 'short', band),
+    ).toEqual({ invalidationPrice: 105, target: 90 });
+    expect(sanitizeExitPlan({ invalidation_price: 90, target_price: 105 }, 'short', band)).toEqual(
+      {},
+    );
+  });
+
+  it('drops non-finite, non-positive, and absurd values', () => {
+    expect(
+      sanitizeExitPlan(
+        { hard_stop_pct: 80, invalidation_price: -5, target_price: NaN, time_stop_hours: 100000 },
+        'long',
+        band,
+      ),
+    ).toEqual({});
+  });
+
+  it('drops a trail missing either field', () => {
+    expect(sanitizeExitPlan({ trail: { activate_pct: 5 } }, 'long', band)).toEqual({});
+  });
+
+  it('non-object input yields an empty plan', () => {
+    expect(sanitizeExitPlan(null, 'long', band)).toEqual({});
+    expect(sanitizeExitPlan('x', 'long', band)).toEqual({});
+  });
+});
+
+describe('mergedExitPlan', () => {
+  it('overlays sanitized LLM fields onto the deterministic fallback', () => {
+    const merged = mergedExitPlan(
+      { direction: 'long', horizon: 'days' },
+      { invalidationPrice: 95 },
+      cfg,
+    );
+    expect(merged).toEqual({ hardStopPct: 8, timeStopHours: 30, invalidationPrice: 95 });
   });
 });

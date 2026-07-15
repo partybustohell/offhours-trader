@@ -4,7 +4,8 @@
 // call evaluateExit so live and sim share one implementation. Priority order
 // is risk-first and fixed: hard_stop > invalidation_price > target > trail >
 // time_stop — the first trigger that fires wins (all-or-nothing exits).
-import type { ExitPlan } from './types.js';
+import type { Config } from './config.js';
+import type { ExitPlan, ThesisEntry } from './types.js';
 
 export type ExitTrigger = 'hard_stop' | 'invalidation_price' | 'target' | 'trail' | 'time_stop';
 
@@ -107,4 +108,92 @@ export function evaluateExit(ctx: ExitContext): ExitDecision {
   }
 
   return { exit: false };
+}
+
+/**
+ * Resolve the enforceable plan for a position. undefined entry = orphan
+ * position: stop-only at the config hard stop, exactly today's protection
+ * (spec §7 locks orphans to stop-only). An entry present but bare degrades to
+ * hard stop + horizon time-stop — a strict superset of today's protection.
+ */
+export function resolveExitPlan(
+  entry: Pick<ThesisEntry, 'direction' | 'exit' | 'horizon'> | undefined,
+  cfg: Config,
+): ExitPlan {
+  const baseStop = cfg.exit_engine.hard_stop_pct ?? cfg.max_position_loss_pct;
+  if (!entry) return { hardStopPct: baseStop };
+  const hardDefault =
+    entry.direction === 'short' ? (cfg.exit_engine.short_hard_stop_pct ?? baseStop) : baseStop;
+  const e = entry.exit;
+  return {
+    hardStopPct: e?.hardStopPct ?? hardDefault,
+    ...(e?.invalidationPrice !== undefined ? { invalidationPrice: e.invalidationPrice } : {}),
+    ...(e?.target !== undefined ? { target: e.target } : {}),
+    ...(e?.trail ? { trail: e.trail } : {}),
+    timeStopHours: e?.timeStopHours ?? cfg.exit_engine.horizon_hours[entry.horizon ?? 'days'],
+  };
+}
+
+// Sanity ceilings for LLM-emitted values: a stop or trail beyond 50% or a
+// time stop beyond ~6 weeks is not a level, it's a hallucination — drop it and
+// let the deterministic fallback cover the field.
+const MAX_LLM_STOP_PCT = 50;
+const MAX_LLM_TIME_STOP_HOURS = 1008; // 6 weeks
+
+/**
+ * Direction-aware validation of a raw LLM exit block (snake_case fields from
+ * the narrative tool schema). Every field is independently validated against
+ * the entry limit band; anything malformed or on the wrong side is DROPPED —
+ * a wrong-side invalidation level would exit instantly at entry, so rejecting
+ * is the fail-safe direction. Returns camelCase partial plan.
+ */
+export function sanitizeExitPlan(
+  raw: unknown,
+  direction: 'long' | 'short',
+  band: { low: number; high: number },
+): Partial<ExitPlan> {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const r = raw as Record<string, unknown>;
+  const num = (v: unknown): number | undefined =>
+    typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : undefined;
+  const isLong = direction === 'long';
+  const out: Partial<ExitPlan> = {};
+
+  const hard = num(r.hard_stop_pct);
+  if (hard !== undefined && hard <= MAX_LLM_STOP_PCT) out.hardStopPct = hard;
+
+  const inval = num(r.invalidation_price);
+  // Thesis-death level must sit on the LOSING side of every admissible entry.
+  if (inval !== undefined && (isLong ? inval < band.low : inval > band.high)) {
+    out.invalidationPrice = inval;
+  }
+
+  const target = num(r.target_price);
+  if (target !== undefined && (isLong ? target > band.high : target < band.low)) {
+    out.target = target;
+  }
+
+  const trailRaw =
+    r.trail !== null && typeof r.trail === 'object' && !Array.isArray(r.trail)
+      ? (r.trail as Record<string, unknown>)
+      : undefined;
+  const activatePct = num(trailRaw?.activate_pct);
+  const trailPct = num(trailRaw?.trail_pct);
+  if (activatePct !== undefined && trailPct !== undefined && trailPct <= MAX_LLM_STOP_PCT) {
+    out.trail = { activatePct, trailPct };
+  }
+
+  const hours = num(r.time_stop_hours);
+  if (hours !== undefined && hours <= MAX_LLM_TIME_STOP_HOURS) out.timeStopHours = hours;
+
+  return out;
+}
+
+/** Deterministic fallback filled first, then sanitized LLM fields on top. */
+export function mergedExitPlan(
+  entry: Pick<ThesisEntry, 'direction' | 'horizon'>,
+  llm: Partial<ExitPlan> | undefined,
+  cfg: Config,
+): ExitPlan {
+  return { ...resolveExitPlan(entry, cfg), ...(llm ?? {}) };
 }
