@@ -149,6 +149,7 @@ describe('saveConfig', () => {
   it('rejects invalid updates without touching the file', () => {
     fs.writeFileSync(configPath, stringifyYaml({ quorum: 2 }));
     expect(() => saveConfig({ quorum: 99 }, configPath)).toThrowError(/invalid config/);
+    expect(() => saveConfig({ universe: 5 }, configPath)).toThrowError(/invalid config/);
     expect(loadConfig(configPath).quorum).toBe(2);
   });
 
@@ -194,6 +195,74 @@ describe('saveConfig', () => {
     expect(saved.execution.entry_aggressiveness).toBe(0.75); // preserved from disk
     expect(saved.execution.participation.enabled).toBe(true); // patched
     expect(saved.execution.cost_scalar.enabled).toBe(false); // default filled
+  });
+
+  it('merges doubly-nested objects: patching one gates_by_session field keeps the rest', () => {
+    fs.writeFileSync(
+      configPath,
+      stringifyYaml({
+        execution: {
+          gates_by_session: {
+            enabled: true,
+            rth: { max_spread_bps: 25 },
+            premarket: { max_quote_age_sec: 60 },
+          },
+        },
+      }),
+    );
+    const saved = saveConfig(
+      { execution: { gates_by_session: { premarket: { max_spread_bps: 60 } } } },
+      configPath,
+    );
+    expect(saved.execution.gates_by_session.premarket.max_spread_bps).toBe(60); // patched
+    expect(saved.execution.gates_by_session.enabled).toBe(true); // NOT flipped back to default false
+    expect(saved.execution.gates_by_session.rth.max_spread_bps).toBe(25); // NOT reset to default 20
+    expect(saved.execution.gates_by_session.premarket.max_quote_age_sec).toBe(60); // sibling kept from disk
+  });
+
+  it('keeps on-disk siblings of a doubly-nested patched field instead of schema defaults', () => {
+    fs.writeFileSync(
+      configPath,
+      stringifyYaml({ signals: { anti_chase: { enabled: true, lookback_days: 10, haircut: 0.3 } } }),
+    );
+    const saved = saveConfig({ signals: { anti_chase: { run_threshold_pct: 15 } } }, configPath);
+    expect(saved.signals.anti_chase.run_threshold_pct).toBe(15); // patched
+    expect(saved.signals.anti_chase.enabled).toBe(true); // NOT reset to default false
+    expect(saved.signals.anti_chase.lookback_days).toBe(10); // NOT reset to default 5
+    expect(saved.signals.anti_chase.haircut).toBe(0.3); // NOT reset to default 0.5
+  });
+
+  it('drops a __proto__ key from a JSON body instead of mutating the prototype', () => {
+    fs.writeFileSync(configPath, stringifyYaml({ quorum: 2 }));
+    // JSON.parse creates an own '__proto__' key, as express.json() would
+    const body = JSON.parse('{"__proto__": {"quorum": 5}, "min_agreeing": 1}');
+    const saved = saveConfig(body, configPath);
+    expect(saved.quorum).toBe(2); // on-disk value, not smuggled via the prototype chain
+    expect(saved.min_agreeing).toBe(1); // rest of the patch still applies
+    expect(Object.getPrototypeOf(saved)).toBe(Object.prototype);
+  });
+
+  it('replaces arrays whole instead of merging element-wise', () => {
+    fs.writeFileSync(
+      configPath,
+      stringifyYaml({
+        universe: { exclude: ['GME', 'AMC'] },
+        calibration: {
+          min_trades: 60,
+          table: [
+            { score: 0.5, prob: 0.6 },
+            { score: 0.8, prob: 0.7 },
+          ],
+        },
+      }),
+    );
+    const saved = saveConfig(
+      { universe: { exclude: ['TSLA'] }, calibration: { table: [{ score: 0.6, prob: 0.65 }] } },
+      configPath,
+    );
+    expect(saved.universe.exclude).toEqual(['TSLA']); // no phantom leftovers from disk
+    expect(saved.calibration.table).toEqual([{ score: 0.6, prob: 0.65 }]);
+    expect(saved.calibration.min_trades).toBe(60); // sibling still merged from disk
   });
 });
 

@@ -295,10 +295,31 @@ export function loadConfig(configPath: string = CONFIG_PATH): Config {
   return parsed.data;
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Merge a PATCH fragment into the current value at any depth: plain objects
+ * merge key-by-key, everything else (scalars, arrays, null) replaces whole.
+ * Arrays are atomic values here — element-wise merging would leave phantom
+ * on-disk entries behind a shorter patched array.
+ */
+function deepMerge(base: unknown, patch: unknown): unknown {
+  if (!isPlainObject(base) || !isPlainObject(patch)) return patch;
+  const merged: Record<string, unknown> = { ...base };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === undefined) continue;
+    merged[key] = deepMerge(base[key], value);
+  }
+  return merged;
+}
+
 /**
  * Validate and persist a config update, treated as a PATCH: fields omitted
  * from the body keep their on-disk values instead of resetting to schema
- * defaults (a partial body must never silently loosen a risk cap).
+ * defaults (a partial body must never silently loosen a risk cap). The merge
+ * is recursive, so this holds at every nesting depth, not just the top level.
  * `mode` and `live_trading_acknowledged` are immutable through this path:
  * whatever the caller sends, the on-disk values are kept. Switching to live
  * requires editing config.yaml by hand.
@@ -308,29 +329,7 @@ export function saveConfig(next: unknown, configPath: string = CONFIG_PATH): Con
   if (next === null || typeof next !== 'object' || Array.isArray(next)) {
     throw new Error('invalid config: body must be an object');
   }
-  const patch = next as Record<string, unknown>;
-  const candidate: Record<string, unknown> = { ...current, ...patch };
-  // one level of nesting: merge known object fields key-by-key
-  for (const key of [
-    'universe',
-    'sessions',
-    'agent_weights',
-    'model',
-    'entry_blackout',
-    'signals',
-    'regime',
-    'portfolio',
-    'execution',
-    'risk_overlay',
-    'calibration',
-  ] as const) {
-    if (patch[key] !== undefined) {
-      if (patch[key] === null || typeof patch[key] !== 'object' || Array.isArray(patch[key])) {
-        throw new Error(`invalid config: ${key} must be an object`);
-      }
-      candidate[key] = { ...current[key], ...(patch[key] as Record<string, unknown>) };
-    }
-  }
+  const candidate = deepMerge(current, next);
   const parsed = ConfigSchema.safeParse(candidate);
   if (!parsed.success) {
     const issues = parsed.error.issues
