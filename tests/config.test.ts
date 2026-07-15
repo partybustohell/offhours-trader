@@ -195,6 +195,17 @@ describe('saveConfig', () => {
     expect(saved.execution.participation.enabled).toBe(true); // patched
     expect(saved.execution.cost_scalar.enabled).toBe(false); // default filled
   });
+
+  it('merges exit_engine key-by-key like the other nested objects', () => {
+    fs.writeFileSync(
+      configPath,
+      stringifyYaml({ exit_engine: { hard_stop_pct: 6, horizon_hours: { days: 20, weeks: 90 } } }),
+    );
+    const saved = saveConfig({ exit_engine: { short_hard_stop_pct: 4 } }, configPath);
+    expect(saved.exit_engine.hard_stop_pct).toBe(6); // preserved from disk
+    expect(saved.exit_engine.short_hard_stop_pct).toBe(4); // patched
+    expect(saved.exit_engine.enabled).toBe(true); // default filled
+  });
 });
 
 describe('assertModeRunnable', () => {
