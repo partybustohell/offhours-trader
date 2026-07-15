@@ -31,6 +31,10 @@ describe('evaluateExit: hard stop', () => {
   it('never fires on a zero entry price (no basis)', () => {
     expect(evaluateExit({ ...base, entryPrice: 0, markPrice: 1 }).exit).toBe(false);
   });
+
+  it('short: does not fire a hair below the stop level', () => {
+    expect(evaluateExit({ ...base, direction: 'short', markPrice: 107.99, peakFavorablePrice: 100 }).exit).toBe(false);
+  });
 });
 
 describe('evaluateExit: invalidation price', () => {
@@ -71,5 +75,105 @@ describe('evaluateExit: invalidation price', () => {
       markPrice: 92,
     });
     expect(d.trigger).toBe('hard_stop');
+  });
+
+  it('short holds a hair below the invalidation level', () => {
+    const d = evaluateExit({
+      ...base,
+      direction: 'short',
+      plan: { hardStopPct: 50, invalidationPrice: 105 },
+      markPrice: 104.99,
+    });
+    expect(d.exit).toBe(false);
+  });
+});
+
+describe('evaluateExit: target', () => {
+  it('long take-profit at mark >= target', () => {
+    const d = evaluateExit({ ...base, plan: { hardStopPct: 50, target: 110 }, markPrice: 110 });
+    expect(d.exit).toBe(true);
+    expect(d.trigger).toBe('target');
+  });
+
+  it('short take-profit at mark <= target', () => {
+    const d = evaluateExit({
+      ...base,
+      direction: 'short',
+      plan: { hardStopPct: 50, target: 90 },
+      markPrice: 90,
+    });
+    expect(d.exit).toBe(true);
+    expect(d.trigger).toBe('target');
+  });
+
+  it('invalidation outranks target when both are true', () => {
+    const d = evaluateExit({
+      ...base,
+      plan: { hardStopPct: 50, invalidationPrice: 95, target: 94 },
+      markPrice: 94,
+    });
+    expect(d.trigger).toBe('invalidation_price');
+  });
+});
+
+describe('evaluateExit: trail', () => {
+  const trailPlan = { hardStopPct: 50, trail: { activatePct: 5, trailPct: 2 } };
+
+  it('long: armed by peak gain, exits on retrace from the peak', () => {
+    const d = evaluateExit({
+      ...base,
+      plan: trailPlan,
+      peakFavorablePrice: 106, // +6% >= activate 5%
+      markPrice: 103.88, // retrace (106-103.88)/106 = 2.0%
+    });
+    expect(d.exit).toBe(true);
+    expect(d.trigger).toBe('trail');
+  });
+
+  it('long: not armed below the activation gain', () => {
+    const d = evaluateExit({
+      ...base,
+      plan: trailPlan,
+      peakFavorablePrice: 104, // +4% < 5%: never armed
+      markPrice: 100,
+    });
+    expect(d.exit).toBe(false);
+  });
+
+  it('short: peak is the LOW; exits when mark retraces up from it', () => {
+    const d = evaluateExit({
+      ...base,
+      direction: 'short',
+      plan: trailPlan,
+      peakFavorablePrice: 94, // 6% favorable move down
+      markPrice: 95.88, // (95.88-94)/94 = 2.0% retrace
+    });
+    expect(d.exit).toBe(true);
+    expect(d.trigger).toBe('trail');
+  });
+});
+
+describe('evaluateExit: time stop', () => {
+  it('fires once the holding period reaches the limit', () => {
+    const d = evaluateExit({
+      ...base,
+      plan: { hardStopPct: 50, timeStopHours: 24 },
+      nowMs: 24 * 3_600_000,
+    });
+    expect(d.exit).toBe(true);
+    expect(d.trigger).toBe('time_stop');
+  });
+
+  it('does not fire one ms before the limit', () => {
+    const d = evaluateExit({
+      ...base,
+      plan: { hardStopPct: 50, timeStopHours: 24 },
+      nowMs: 24 * 3_600_000 - 1,
+    });
+    expect(d.exit).toBe(false);
+  });
+
+  it('bare plan (hard stop only) never time-stops', () => {
+    expect(evaluateExit({ ...base, nowMs: 10_000 * 3_600_000 }).exit).toBe(false);
   });
 });

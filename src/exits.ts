@@ -24,6 +24,12 @@ export interface ExitDecision {
   trigger?: ExitTrigger;
 }
 
+// Float tolerance for computed-percentage comparisons (division introduces
+// IEEE754 noise, e.g. (95.88-94)/94*100 = 1.9999999999999951, not 2). Applied
+// only to ratios derived via division; integer-ms and direct-price
+// comparisons below are exact and don't need it.
+const EPS = 1e-9;
+
 export function evaluateExit(ctx: ExitContext): ExitDecision {
   const { direction, entryPrice, markPrice, plan } = ctx;
   const isLong = direction === 'long';
@@ -32,7 +38,7 @@ export function evaluateExit(ctx: ExitContext): ExitDecision {
   if (entryPrice > 0) {
     const lossPct =
       ((isLong ? entryPrice - markPrice : markPrice - entryPrice) / entryPrice) * 100;
-    if (lossPct >= plan.hardStopPct) {
+    if (lossPct >= plan.hardStopPct - EPS) {
       return {
         exit: true,
         trigger: 'hard_stop',
@@ -51,6 +57,53 @@ export function evaluateExit(ctx: ExitContext): ExitDecision {
         reason: `invalidation_price: mark ${markPrice} ${isLong ? '<=' : '>='} ${plan.invalidationPrice}`,
       };
     }
+  }
+
+  // 3. target — pre-committed take-profit.
+  if (plan.target !== undefined) {
+    const hit = isLong ? markPrice >= plan.target : markPrice <= plan.target;
+    if (hit) {
+      return {
+        exit: true,
+        trigger: 'target',
+        reason: `target: mark ${markPrice} ${isLong ? '>=' : '<='} ${plan.target}`,
+      };
+    }
+  }
+
+  // 4. trail — armed once the favorable move reached activatePct, then exits
+  // when the mark retraces trailPct from the favorable peak (long: high; short: low).
+  if (plan.trail && entryPrice > 0 && ctx.peakFavorablePrice > 0) {
+    const gainPct =
+      ((isLong ? ctx.peakFavorablePrice - entryPrice : entryPrice - ctx.peakFavorablePrice) /
+        entryPrice) *
+      100;
+    if (gainPct >= plan.trail.activatePct - EPS) {
+      const retracePct =
+        ((isLong ? ctx.peakFavorablePrice - markPrice : markPrice - ctx.peakFavorablePrice) /
+          ctx.peakFavorablePrice) *
+        100;
+      if (retracePct >= plan.trail.trailPct - EPS) {
+        return {
+          exit: true,
+          trigger: 'trail',
+          reason: `trail: retrace ${retracePct.toFixed(1)}% from peak ${ctx.peakFavorablePrice} >= ${plan.trail.trailPct}%`,
+        };
+      }
+    }
+  }
+
+  // 5. time_stop — entry-relative horizon (replaces the blind boundary flatten).
+  if (
+    plan.timeStopHours !== undefined &&
+    ctx.nowMs - ctx.entryTimeMs >= plan.timeStopHours * 3_600_000
+  ) {
+    const heldH = (ctx.nowMs - ctx.entryTimeMs) / 3_600_000;
+    return {
+      exit: true,
+      trigger: 'time_stop',
+      reason: `time_stop: held ${heldH.toFixed(1)}h >= ${plan.timeStopHours}h`,
+    };
   }
 
   return { exit: false };
