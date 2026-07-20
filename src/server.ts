@@ -10,6 +10,7 @@ import { readHaltState, writeHalt, clearHalt } from './state.js';
 import { candidatesPath, verdictsPath, thesisPath, readJsonIfExists } from './paths.js';
 import { AlpacaBroker } from './broker/client.js';
 import { resolveBacktestNetPnl } from './server-backtest.js';
+import { assertBindAllowed, requireBearerToken } from './server-auth.js';
 
 const PORT = Number(process.env.PORT) || 4310;
 const ROOT = process.cwd();
@@ -79,6 +80,11 @@ function startRun(kind: RunKind, res: Response): void {
 
 const app = express();
 app.use(express.json());
+
+// Network clients must present the bearer token on /api (loopback exempt —
+// the ssh -L tunnel workflow stays tokenless). See src/server-auth.ts.
+const DASHBOARD_TOKEN = process.env.DASHBOARD_TOKEN ?? '';
+if (DASHBOARD_TOKEN) app.use(requireBearerToken(DASHBOARD_TOKEN));
 
 const distDir = path.resolve(ROOT, 'frontend', 'dist');
 if (fs.existsSync(distDir)) {
@@ -349,10 +355,12 @@ process.on('unhandledRejection', (err) => {
   console.error('unhandledRejection:', err);
 });
 
-// Bind loopback only by default: the dashboard has no auth and can edit the
-// config, so it must never be reachable from the network. HOST is an explicit
-// escape hatch for a trusted-network deployment.
+// Bind loopback only by default: the dashboard can edit the config, so it
+// must never be reachable from the network unauthenticated. HOST is the
+// explicit escape hatch, and a non-loopback HOST requires DASHBOARD_TOKEN —
+// the process refuses to start otherwise (fail closed).
 const HOST = process.env.HOST || '127.0.0.1';
+assertBindAllowed(HOST, DASHBOARD_TOKEN);
 app.listen(PORT, HOST, () => {
   console.log(`offhours-trader server listening on http://${HOST}:${PORT}`);
 });
