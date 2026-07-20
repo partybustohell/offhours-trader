@@ -6,7 +6,7 @@ import type { ProposedOrder, QuoteSnapshot, Thesis, ThesisKind } from './types.j
 import type { Config } from './config.js';
 import { loadConfig } from './config.js';
 import { currentSession, nowET, sessionEnabled } from './clock.js';
-import { entryTimingAllowed, sessionGate } from './session-risk.js';
+import { activeEventBlackout, entryTimingAllowed, sessionGate } from './session-risk.js';
 import { costScalar, drawdownThrottle, participationQty, riskOffTriggered } from './signals.js';
 import { appendAudit } from './audit.js';
 import { evaluateExit, resolveExitPlan } from './exits.js';
@@ -466,8 +466,27 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
     });
   }
 
+  // Scheduled-event blackout (entries only, like the timing blackout above).
+  // A thesis formed at 17:00 yesterday knows nothing about this morning's
+  // print; the deterministic calendar keeps the executor from opening risk
+  // into a known binary event. Exits above already ran ungated.
+  const eventBlock = activeEventBlackout(nowET(now), cfg);
+  if (eventBlock && entriesAllowedByTiming && thesis.entries.length > 0) {
+    appendAudit({
+      kind: 'tick',
+      data: {
+        stage: 'event_blackout',
+        session,
+        label: eventBlock.label,
+        eventHm: eventBlock.hm,
+        action: 'skip_entries',
+        count: thesis.entries.length,
+      },
+    });
+  }
+
   for (const entry of thesis.entries) {
-    if (!entriesAllowedByTiming) break; // timing blackout: no new entries this tick
+    if (!entriesAllowedByTiming || eventBlock) break; // timing/event blackout: no new entries this tick
     const ticker = entry.ticker.toUpperCase();
     if (account.positions.some((p) => p.ticker.toUpperCase() === ticker)) {
       skip(ticker, 'position exists');

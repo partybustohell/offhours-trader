@@ -253,3 +253,44 @@ describe('executor exit engine', () => {
     expect(placed[0]!.stopLoss).toBe(96);
   });
 });
+
+describe('macro-event entry blackout', () => {
+  it('blocks entries inside the window but still places exits', async () => {
+    // 09:00 ET on 2026-07-15 with a 09:15 event: inside [08:45, 09:30).
+    const thesis = fslrThesis({ hardStopPct: 8, timeStopHours: 1 });
+    thesis.entries.push({
+      ticker: 'GS',
+      direction: 'long',
+      weightedConviction: 0.6,
+      limitBand: { low: 97, high: 103 },
+      targetNotionalUsd: 1000,
+      narrative: 'entry candidate',
+      invalidationConditions: [],
+      horizon: 'days',
+      exit: { hardStopPct: 8, timeStopHours: 30 } as never,
+    });
+    writeThesis(thesis);
+    fs.writeFileSync(
+      path.join(dir, 'out', 'position-peaks.json'),
+      JSON.stringify({
+        FSLR: { side: 'short', entryTimeMs: NOW.getTime() - 2 * 3_600_000, peak: 220 },
+      }),
+    );
+    const cfg = baseCfg();
+    cfg.macro_event_blackout.events = [{ date: YMD, hm: '09:15', label: 'TEST-EVENT' }];
+    const placed: ProposedOrder[] = [];
+    await runTick({
+      cfg,
+      now: NOW,
+      broker: fakeBroker({ equity: 100000, cash: 100000, positions: [shortPosition] }, placed),
+      marketData: fakeMd([quote('FSLR', 219.0, 219.1), quote('GS', 99.9, 100.0)]),
+      llm: {} as never,
+    });
+    // The FSLR time_stop exit fires; the GS entry is blocked by the event window.
+    expect(placed).toHaveLength(1);
+    expect(placed[0]).toMatchObject({ ticker: 'FSLR', intent: 'exit' });
+    const audit = readAudit();
+    expect(audit).toContain('"stage":"event_blackout"');
+    expect(audit).toContain('TEST-EVENT');
+  });
+});
