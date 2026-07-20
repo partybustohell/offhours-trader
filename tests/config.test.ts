@@ -273,3 +273,28 @@ describe('exit_engine config', () => {
     expect(() => ConfigSchema.parse({ exit_engine: { hard_stop_pct: 0 } })).toThrow();
   });
 });
+
+describe('macro_event_blackout config', () => {
+  it('defaults: enabled with an empty calendar (inert) and 30/15 windows', () => {
+    const cfg = ConfigSchema.parse({});
+    expect(cfg.macro_event_blackout).toEqual({ enabled: true, pre_min: 30, post_min: 15, events: [] });
+  });
+
+  it('accepts a calendar of dated ET events', () => {
+    const cfg = ConfigSchema.parse({
+      macro_event_blackout: {
+        events: [{ date: '2026-08-12', hm: '08:30', label: 'CPI' }],
+      },
+    });
+    expect(cfg.macro_event_blackout.events).toHaveLength(1);
+  });
+
+  it('rejects malformed dates and times', () => {
+    expect(() =>
+      ConfigSchema.parse({ macro_event_blackout: { events: [{ date: '08/12/2026', hm: '08:30', label: 'CPI' }] } }),
+    ).toThrow();
+    expect(() =>
+      ConfigSchema.parse({ macro_event_blackout: { events: [{ date: '2026-08-12', hm: '8:30am', label: 'CPI' }] } }),
+    ).toThrow();
+  });
+});

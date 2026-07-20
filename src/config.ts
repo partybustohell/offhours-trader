@@ -69,6 +69,29 @@ export const ConfigSchema = z.object({
       afterhours_end_hm: z.string().regex(/^\d{2}:\d{2}$/).default('18:00'),
     })
     .default({}),
+  // Entries-only blackout around scheduled binary macro events (CPI, FOMC,
+  // payrolls). Wall-clock ET, feed-independent, exits NEVER gated — the same
+  // discipline as entry_blackout, extended to a dated calendar. The calendar
+  // is static config: no API dependency, no fail-open surprise. An empty list
+  // means no gate; dates must be refreshed as agencies publish schedules
+  // (docs/RUNBOOK.md). The macro analyst's event veto operates only at thesis
+  // time (17:00 D-1); this gate is the execution-time backstop.
+  macro_event_blackout: z
+    .object({
+      enabled: z.boolean().default(true),
+      pre_min: z.number().int().min(0).max(240).default(30),
+      post_min: z.number().int().min(0).max(240).default(15),
+      events: z
+        .array(
+          z.object({
+            date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), // ET calendar date
+            hm: z.string().regex(/^\d{2}:\d{2}$/), // ET 24h release time
+            label: z.string(),
+          }),
+        )
+        .default([]),
+    })
+    .default({}),
   // Cross-day exposure backstop in the risk gate (entries only). Sits ABOVE
   // the per-day deploy cap: bounds the total book that can accumulate over
   // multiple sessions. Gross = sum of absolute position + resting-entry +
@@ -353,6 +376,7 @@ export function saveConfig(next: unknown, configPath: string = CONFIG_PATH): Con
     'risk_overlay',
     'calibration',
     'exit_engine',
+    'macro_event_blackout',
   ] as const) {
     if (patch[key] !== undefined) {
       if (patch[key] === null || typeof patch[key] !== 'object' || Array.isArray(patch[key])) {

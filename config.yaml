@@ -60,6 +60,31 @@ entry_blackout:
   rth_close_min: 10            # skip the last N min before the close (15:50–16:00)
   premarket_start_hm: "08:00"  # no premarket entries before this ET time
   afterhours_end_hm: "18:00"   # no afterhours entries at/after this ET time
+# Entries-only blackout around scheduled binary macro prints (exits never
+# gated). Static ET calendar — refresh from bls.gov + federalreserve.gov as
+# schedules publish (see docs/RUNBOOK.md). Added 2026-07-15 after the June-CPI
+# review: the executor could otherwise enter premarket positions minutes
+# before an 08:30 print on a thesis formed at 17:00 the prior evening.
+# Dates below verified against the primary sources 2026-07-20.
+macro_event_blackout:
+  enabled: true
+  pre_min: 30
+  post_min: 15
+  events:
+    - { date: "2026-07-29", hm: "14:00", label: "FOMC statement" }
+    - { date: "2026-08-07", hm: "08:30", label: "Nonfarm payrolls" }
+    - { date: "2026-08-12", hm: "08:30", label: "CPI" }
+    - { date: "2026-09-04", hm: "08:30", label: "Nonfarm payrolls" }
+    - { date: "2026-09-11", hm: "08:30", label: "CPI" }
+    - { date: "2026-09-16", hm: "14:00", label: "FOMC statement" }
+    - { date: "2026-10-02", hm: "08:30", label: "Nonfarm payrolls" }
+    - { date: "2026-10-14", hm: "08:30", label: "CPI" }
+    - { date: "2026-10-28", hm: "14:00", label: "FOMC statement" }
+    - { date: "2026-11-06", hm: "08:30", label: "Nonfarm payrolls" }
+    - { date: "2026-11-10", hm: "08:30", label: "CPI" }
+    - { date: "2026-12-04", hm: "08:30", label: "Nonfarm payrolls" }
+    - { date: "2026-12-09", hm: "14:00", label: "FOMC statement" }
+    - { date: "2026-12-10", hm: "08:30", label: "CPI" }
 target_vol_pct: 40          # risk-parity sizing reference (annualized vol %)
 max_position_loss_pct: 8    # per-position hard stop, checked each tick
 max_order_notional_usd: 2000
