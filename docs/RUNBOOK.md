@@ -124,3 +124,16 @@ real trade sample with SIP data. Then, by hand:
   not raise `max_position_pct` to compensate.
 - **Every decision is audited** to `out/audit-<date>.jsonl`. When something
   looks wrong, that file is the record of exactly what happened and why.
+
+## Macro-event calendar refresh (monthly)
+
+`config.yaml -> macro_event_blackout.events` is a static ET calendar. On the
+first weekday of each month, refresh it from the primary sources so every
+CPI/FOMC/payrolls release through at least the next 60 days is listed:
+
+- CPI: https://www.bls.gov/schedule/news_release/cpi.htm (08:30 ET)
+- Employment situation: https://www.bls.gov/schedule/news_release/empsit.htm (08:30 ET)
+- FOMC statements: https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm (14:00 ET, final meeting day)
+
+An empty or stale calendar simply provides no gate on unlisted dates — the
+executor logs `event_blackout` skips only for dates that are present.

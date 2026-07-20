@@ -171,6 +171,11 @@ export function computeThesisEntries(
       ),
     ];
 
+    // Dominant verdict horizon of the agreeing analysts (strict majority for
+    // 'weeks', else 'days') — feeds the exit engine's time-stop fallback.
+    const weeksVotes = agreeing.filter((v) => v.horizon === 'weeks').length;
+    const horizon: 'days' | 'weeks' = weeksVotes * 2 > agreeing.length ? 'weeks' : 'days';
+
     entries.push({
       ticker,
       direction,
@@ -178,6 +183,7 @@ export function computeThesisEntries(
       limitBand,
       targetNotionalUsd,
       invalidationConditions,
+      horizon,
       ...(sizing ? { sizing } : {}),
     });
   }

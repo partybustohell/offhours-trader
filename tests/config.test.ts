@@ -264,6 +264,17 @@ describe('saveConfig', () => {
     expect(saved.calibration.table).toEqual([{ score: 0.6, prob: 0.65 }]);
     expect(saved.calibration.min_trades).toBe(60); // sibling still merged from disk
   });
+
+  it('merges exit_engine key-by-key like the other nested objects', () => {
+    fs.writeFileSync(
+      configPath,
+      stringifyYaml({ exit_engine: { hard_stop_pct: 6, horizon_hours: { days: 20, weeks: 90 } } }),
+    );
+    const saved = saveConfig({ exit_engine: { short_hard_stop_pct: 4 } }, configPath);
+    expect(saved.exit_engine.hard_stop_pct).toBe(6); // preserved from disk
+    expect(saved.exit_engine.short_hard_stop_pct).toBe(4); // patched
+    expect(saved.exit_engine.enabled).toBe(true); // default filled
+  });
 });
 
 describe('assertModeRunnable', () => {
@@ -306,5 +317,53 @@ describe('assertModeRunnable', () => {
   it('allows paper and dry-run with an empty env', () => {
     expect(() => assertModeRunnable(ConfigSchema.parse({ mode: 'paper' }), {})).not.toThrow();
     expect(() => assertModeRunnable(ConfigSchema.parse({ mode: 'dry-run' }), {})).not.toThrow();
+  });
+});
+
+describe('exit_engine config', () => {
+  it('defaults: enabled, no explicit stop overrides, conservative horizon hours', () => {
+    const cfg = ConfigSchema.parse({});
+    expect(cfg.exit_engine).toEqual({
+      enabled: true,
+      horizon_hours: { days: 30, weeks: 120 },
+    });
+  });
+
+  it('accepts explicit stop overrides and horizon hours', () => {
+    const cfg = ConfigSchema.parse({
+      exit_engine: { hard_stop_pct: 6, short_hard_stop_pct: 4, horizon_hours: { days: 12, weeks: 60 } },
+    });
+    expect(cfg.exit_engine.hard_stop_pct).toBe(6);
+    expect(cfg.exit_engine.short_hard_stop_pct).toBe(4);
+    expect(cfg.exit_engine.horizon_hours).toEqual({ days: 12, weeks: 60 });
+  });
+
+  it('rejects a non-positive hard stop', () => {
+    expect(() => ConfigSchema.parse({ exit_engine: { hard_stop_pct: 0 } })).toThrow();
+  });
+});
+
+describe('macro_event_blackout config', () => {
+  it('defaults: enabled with an empty calendar (inert) and 30/15 windows', () => {
+    const cfg = ConfigSchema.parse({});
+    expect(cfg.macro_event_blackout).toEqual({ enabled: true, pre_min: 30, post_min: 15, events: [] });
+  });
+
+  it('accepts a calendar of dated ET events', () => {
+    const cfg = ConfigSchema.parse({
+      macro_event_blackout: {
+        events: [{ date: '2026-08-12', hm: '08:30', label: 'CPI' }],
+      },
+    });
+    expect(cfg.macro_event_blackout.events).toHaveLength(1);
+  });
+
+  it('rejects malformed dates and times', () => {
+    expect(() =>
+      ConfigSchema.parse({ macro_event_blackout: { events: [{ date: '08/12/2026', hm: '08:30', label: 'CPI' }] } }),
+    ).toThrow();
+    expect(() =>
+      ConfigSchema.parse({ macro_event_blackout: { events: [{ date: '2026-08-12', hm: '8:30am', label: 'CPI' }] } }),
+    ).toThrow();
   });
 });

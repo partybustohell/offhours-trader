@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ConfigSchema, type Config } from '../src/config.js';
-import { entryTimingAllowed, hmToMinutes, sessionGate } from '../src/session-risk.js';
+import { activeEventBlackout, entryTimingAllowed, hmToMinutes, sessionGate } from '../src/session-risk.js';
 import type { Session } from '../src/types.js';
 
 const cfg = (overrides: Record<string, unknown> = {}): Config => ConfigSchema.parse(overrides);
@@ -92,5 +92,37 @@ describe('sessionGate (session-calibrated pre-trade gates; SIP-only)', () => {
     expect(sessionGate('premarket', c)).toEqual({ maxSpreadBps: 80, maxQuoteAgeSec: 90, minTopSize: 100 });
     // closed session has no calibrated entry -> flat fallback
     expect(sessionGate('closed', c)).toEqual({ maxSpreadBps: c.max_spread_bps, maxQuoteAgeSec: c.max_quote_age_sec, minTopSize: 1 });
+  });
+});
+
+describe('activeEventBlackout', () => {
+  const eventCfg = ConfigSchema.parse({
+    macro_event_blackout: {
+      enabled: true,
+      pre_min: 30,
+      post_min: 15,
+      events: [{ date: '2026-08-12', hm: '08:30', label: 'CPI' }],
+    },
+  });
+  const minutes = (hm: string) => hmToMinutes(hm);
+
+  it('blocks from pre_min before through post_min after the release', () => {
+    expect(activeEventBlackout({ ymd: '2026-08-12', minutes: minutes('08:00') }, eventCfg)?.label).toBe('CPI');
+    expect(activeEventBlackout({ ymd: '2026-08-12', minutes: minutes('08:30') }, eventCfg)?.label).toBe('CPI');
+    expect(activeEventBlackout({ ymd: '2026-08-12', minutes: minutes('08:44') }, eventCfg)?.label).toBe('CPI');
+  });
+
+  it('is open just outside the window', () => {
+    expect(activeEventBlackout({ ymd: '2026-08-12', minutes: minutes('07:59') }, eventCfg)).toBeNull();
+    expect(activeEventBlackout({ ymd: '2026-08-12', minutes: minutes('08:45') }, eventCfg)).toBeNull();
+  });
+
+  it('ignores other dates, disabled gate, and an empty calendar', () => {
+    expect(activeEventBlackout({ ymd: '2026-08-13', minutes: minutes('08:30') }, eventCfg)).toBeNull();
+    const off = ConfigSchema.parse({
+      macro_event_blackout: { enabled: false, events: [{ date: '2026-08-12', hm: '08:30', label: 'CPI' }] },
+    });
+    expect(activeEventBlackout({ ymd: '2026-08-12', minutes: minutes('08:30') }, off)).toBeNull();
+    expect(activeEventBlackout({ ymd: '2026-08-12', minutes: minutes('08:30') }, ConfigSchema.parse({}))).toBeNull();
   });
 });

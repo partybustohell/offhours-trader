@@ -181,6 +181,9 @@ export interface BrokerClient {
   /** Cancel all open orders for a ticker (e.g. a resting RTH stop-loss leg
    *  before a manual exit). No-op when there are none. */
   cancelOrdersFor(ticker: string): Promise<void>;
+  /** Asset shortability/borrow flags for the live short gate. Null when the
+   *  asset lookup fails, so the caller fails closed. */
+  getAsset(ticker: string): Promise<{ shortable: boolean; easyToBorrow: boolean } | null>;
 }
 
 export class AlpacaBroker implements BrokerClient {
@@ -228,6 +231,19 @@ export class AlpacaBroker implements BrokerClient {
       cash: Number(account.cash ?? 0),
       positions,
     };
+  }
+
+  async getAsset(ticker: string): Promise<{ shortable: boolean; easyToBorrow: boolean } | null> {
+    try {
+      const a = (await this.request(`/v2/assets/${encodeURIComponent(ticker.toUpperCase())}`)) as {
+        shortable?: boolean;
+        easy_to_borrow?: boolean;
+      };
+      return { shortable: a.shortable === true, easyToBorrow: a.easy_to_borrow === true };
+    } catch {
+      // Lookup failed (not found / network) -> null; the short gate fails closed.
+      return null;
+    }
   }
 
   async getDailyPl(): Promise<number> {

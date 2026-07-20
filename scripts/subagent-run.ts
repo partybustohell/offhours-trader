@@ -142,6 +142,7 @@ async function main(): Promise<void> {
       getOpenOrders: async () => [],
       getTodayOrders: async () => [],
       cancelOrdersFor: async (): Promise<void> => {},
+      getAsset: async () => ({ shortable: true, easyToBorrow: true }),
       placeLimitOrder: async (o: ProposedOrder): Promise<BrokerOrder> => {
         placed++;
         return {

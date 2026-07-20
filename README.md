@@ -69,8 +69,10 @@ Everything lives in `config.yaml` and is editable from the dashboard's config
 panel (except the two live-mode fields): universe filters and exclude list,
 per-agent weights, conviction threshold, quorum, position/deployment/notional
 caps, spread tolerance, limit-band chase/drop percentages, daily-loss halt,
-session toggles, executor interval, and per-role model choice. Changes take
-effect on the next pipeline run or executor tick.
+session toggles, executor interval, per-role model choice, the structured exit
+engine (`exit_engine`), and a macro-event entry blackout calendar
+(`macro_event_blackout`). Changes take effect on the next pipeline run or
+executor tick.
 
 ## Scheduling (macOS)
 

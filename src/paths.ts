@@ -19,6 +19,9 @@ export const statePath = () => path.join(OUT_DIR, 'state.json');
 /** High-water-mark equity for the drawdown throttle (separate file so the halt
  *  state write never clobbers it). */
 export const peakPath = () => path.join(OUT_DIR, 'peak.json');
+/** Per-position favorable-peak state for the exit engine's trailing stop
+ *  (ticker -> { side, entryTimeMs, peak }); cleared as positions close. */
+export const peaksPath = () => path.join(OUT_DIR, 'position-peaks.json');
 
 export function writeJsonAtomic(file: string, data: unknown): void {
   ensureOut();

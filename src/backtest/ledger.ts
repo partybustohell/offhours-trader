@@ -395,6 +395,17 @@ export class SimLedger implements BrokerClient {
   }
 
   /**
+   * BrokerClient parity for the live short gate. Mirrors the etb set: a name the
+   * sim treats as easy-to-borrow is reported shortable + easy-to-borrow. The
+   * driver already filters non-etb shorts out of the thesis (backtest-episode),
+   * so runTick's live gate is a consistent no-op on the shorts that reach it.
+   */
+  async getAsset(ticker: string): Promise<{ shortable: boolean; easyToBorrow: boolean } | null> {
+    const etb = this.checkShortable(ticker);
+    return { shortable: etb, easyToBorrow: etb };
+  }
+
+  /**
    * Apply fills to working orders as of sim now, considering only bars that
    * are complete (barOpen + 60s <= now): a 15-minute tick can never see a
    * fill from a bar still in the future or in progress. Returns the fills

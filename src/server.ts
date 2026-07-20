@@ -4,11 +4,12 @@ import path from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { loadConfig, saveConfig } from './config.js';
-import { currentSession, nowET } from './clock.js';
+import { currentSession, nowET, thesisKindForSession } from './clock.js';
 import { appendAudit, readAuditTail } from './audit.js';
 import { readHaltState, writeHalt, clearHalt } from './state.js';
 import { candidatesPath, verdictsPath, thesisPath, readJsonIfExists } from './paths.js';
 import { AlpacaBroker } from './broker/client.js';
+import { resolveBacktestNetPnl } from './server-backtest.js';
 
 const PORT = Number(process.env.PORT) || 4310;
 const ROOT = process.cwd();
@@ -55,7 +56,12 @@ function startRun(kind: RunKind, res: Response): void {
     res.status(409).json({ error: 'already running' });
     return;
   }
-  const child = spawn('pnpm', ['tsx', RUN_SCRIPTS[kind]], {
+  // A pipeline run must produce the thesis kind the executor will consume for
+  // the current session, or the plan is stranded (see thesisKindForSession).
+  // The executor tick takes no session argument.
+  const sessionArgs =
+    kind === 'pipeline' && thesisKindForSession(currentSession()) === 'rth' ? ['rth'] : [];
+  const child = spawn('pnpm', ['tsx', RUN_SCRIPTS[kind], ...sessionArgs], {
     cwd: ROOT,
     detached: true,
     stdio: 'ignore',
@@ -173,13 +179,18 @@ app.get(
 interface BacktestCellRow {
   cell: string;
   threshold: number;
-  bear: number;
+  bear?: number;
+  bearWeight?: number;
   abstained: number;
   ordersPlaced: number;
   ordersFilled: number;
   trades: number;
-  netPnlUsd: number;
+  netPnlUsd: number | null;
 }
+type RawBacktestCellRow = Omit<BacktestCellRow, 'netPnlUsd'> & {
+  netPnlUsd?: unknown;
+  netPnlTotalUsd?: unknown;
+};
 interface BacktestTradeRow {
   day: string;
   stratum: string;
@@ -239,20 +250,14 @@ app.get(
     };
     const rawCells = JSON.parse(
       fs.readFileSync(path.join(btRoot, tag, 'sweep-results.json'), 'utf8'),
-    ) as (Omit<BacktestCellRow, 'netPnlUsd'> & { netPnlUsd?: number | null })[];
+    ) as RawBacktestCellRow[] | { cells: RawBacktestCellRow[] };
     const cellList = Array.isArray(rawCells)
       ? rawCells
-      : (rawCells as { cells: typeof rawCells }).cells;
-    const cells: BacktestCellRow[] = cellList.map((c) => {
-      const trades = readTradesOf(path.join(btRoot, tag, 'sweep', c.cell));
-      return {
-        ...c,
-        netPnlUsd:
-          typeof c.netPnlUsd === 'number'
-            ? c.netPnlUsd
-            : Math.round(trades.reduce((s, t) => s + t.pnlUsd, 0) * 100) / 100,
-      };
-    });
+      : rawCells.cells;
+    const cells: BacktestCellRow[] = cellList.map((cell) => ({
+      ...cell,
+      netPnlUsd: resolveBacktestNetPnl(cell),
+    }));
     // trade log from the loosest cell that actually traded
     const traded = [...cells].sort((a, b) => b.trades - a.trades)[0];
     const trades = traded ? readTradesOf(path.join(btRoot, tag, 'sweep', traded.cell)) : [];

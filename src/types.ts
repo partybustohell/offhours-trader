@@ -59,6 +59,28 @@ export interface SizingAttribution {
   leaveOneOut: Record<string, number>;
 }
 
+/**
+ * Structured exit plan committed at thesis time and enforced every executor
+ * tick by src/exits.ts (spec: docs/superpowers/specs/2026-07-11-exit-discipline-design.md).
+ * All comparisons are direction-aware; absent optional fields simply never fire.
+ */
+export interface ExitPlan {
+  /** Worst-case loss %, > 0; drives the native RTH stop leg AND the tick hard-stop check. */
+  hardStopPct: number;
+  /** Numeric thesis-death level (long: exit if mark <= level; short: >=). */
+  invalidationPrice?: number;
+  /** Take-profit price (long: mark >= target; short: <=). */
+  target?: number;
+  trail?: {
+    /** Arm trailing once unrealized gain >= this %. */
+    activatePct: number;
+    /** Then exit if mark retraces this % from the favorable peak. */
+    trailPct: number;
+  };
+  /** Exit if unresolved this many hours after entry (first-seen fallback). */
+  timeStopHours?: number;
+}
+
 export interface ThesisEntry {
   ticker: string;
   direction: 'long' | 'short';
@@ -67,6 +89,10 @@ export interface ThesisEntry {
   targetNotionalUsd: number;
   narrative: string;
   invalidationConditions: string[];
+  /** Dominant verdict horizon of the agreeing analysts; feeds the time-stop fallback. */
+  horizon?: 'days' | 'weeks';
+  /** Structured exit levels; absent on historical theses (fallbacks apply). */
+  exit?: ExitPlan;
   /** Present when a down-only signal shrank the size (product < 1). */
   sizing?: SizingAttribution;
 }

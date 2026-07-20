@@ -166,3 +166,115 @@ trials:
       even at positive P&L. Set enabledDate when the implementation lands
       (before any result is read); any backtest search against this flag
       requires bumping cells here or appending a campaign row first.
+  - id: insider-cluster-smallcap
+    date: "2026-07-13"
+    flag: signals.insider_cluster
+    type: alpha
+    status: pre-registered
+    horizonDays: 180
+    targetActiveN: 50
+    mechanism:
+      counterparty: >-
+        Slow-to-update holders of small, thinly covered names who do not
+        reprice when a corporate insider makes an unscheduled, information-
+        driven open-market purchase and discloses it on an SEC Form 4.
+      whyTheyPay: >-
+        Opportunistic insiders buy on genuine private information the market
+        absorbs over months, while most Form 4 buys are routine calendar-
+        pattern trades carrying no signal, so the crowd underweights the
+        informative subset and updates too slowly.
+      friction: >-
+        The signal is buried and must be separated from routine trades by
+        classifying each insider's multi-year filing history, and the effect
+        concentrates in names too small and illiquid for institutional desks
+        to size into.
+    notes: >-
+      Registered at DESIGN STAGE (2026-07-13): the signals.insider_cluster
+      machinery does not exist yet and nothing has been evaluated — this row
+      states the hypothesis and its mechanism before any code or search.
+      Source: Cohen, Malloy & Pomorski (2012), "Decoding Inside Information,"
+      J. Finance 67(3):1009-1043 — opportunistic long-short 82 bps/mo VW
+      (t=2.15), routine subset ~zero. GROSS, in-sample 1989-2007, treat as a
+      PRE-DECAY UPPER BOUND: Wintoki (2016) puts the alpha in the earlier
+      subperiod and Jacobs & Müller (2020) find US anomalies lose ~60% post-
+      publication. Predicted locus (pre-registered subgroup): small, thinly
+      covered names entered on opportunistic CLUSTER buys, long-only — small-
+      cap borrow >30%/yr makes the short side uncapturable. Falsifiers: an
+      effect concentrated in large caps falsifies the friction sentence; an
+      effect equal across routine and opportunistic trades falsifies whyTheyPay,
+      even at positive P&L. Data: free SEC EDGAR Form 4 feed. Correlated with
+      earnings-underreaction-smallcap and revision-drift-lowcoverage (same
+      universe, same limits-to-arbitrage) — NOT an independent bet; test as one
+      thesis with three triggers. Set enabledDate when the implementation lands
+      (before any result is read); any backtest search against this flag
+      requires bumping cells here or appending a campaign row first.
+  - id: revision-drift-lowcoverage
+    date: "2026-07-13"
+    flag: signals.revision_drift
+    type: alpha
+    status: pre-registered
+    horizonDays: 90
+    targetActiveN: 50
+    mechanism:
+      counterparty: >-
+        Holders of thinly covered small caps who do not reprice when a lone
+        sell-side analyst issues a forecast revision that moves away from the
+        prevailing consensus estimate.
+      whyTheyPay: >-
+        With few analysts on the name a revision diffuses slowly instead of
+        being arbitraged within minutes, so the crowd stays anchored to the
+        stale consensus and updates over weeks rather than at once.
+      friction: >-
+        Low analyst coverage is itself the limit to arbitrage — nobody is paid
+        to close the gap quickly — and the names are too small and wide-spread
+        for institutions to harvest at size.
+    notes: >-
+      Registered at DESIGN STAGE (2026-07-13): the signals.revision_drift
+      machinery does not exist yet and nothing has been evaluated — this row
+      states the hypothesis and its mechanism before any code or search.
+      Source: Gleason & Lee (2003), "Analyst Forecast Revisions and Market
+      Price Discovery," The Accounting Review 78(1):193-225 — price adjustment
+      is slower and less complete for low-coverage firms; drift concentrates in
+      away-from-consensus ("high-innovation") revisions. GROSS, mid-1990s data,
+      PRE-DECAY UPPER BOUND (earnings-revision momentum attenuated post-2000;
+      Jacobs & Müller 2020 US post-publication decay). Predicted locus (pre-
+      registered subgroup): low-coverage small caps, entry on away-from-
+      consensus revisions only, hold weeks-to-a-quarter, long-only. Falsifiers:
+      an effect concentrated in high-coverage names falsifies the friction
+      sentence; an effect equal for herding and away-from-consensus revisions
+      falsifies whyTheyPay. Data: paid estimate/revision feed required (the cost
+      of the signal). Correlated with earnings-underreaction-smallcap and
+      insider-cluster-smallcap (same universe) — NOT an independent bet. Set
+      enabledDate when the implementation lands (before any result is read);
+      any backtest search against this flag requires bumping cells here or
+      appending a campaign row first.
+  - id: exit-engine-v1
+    date: "2026-07-15"
+    window: "2026-01-01..2026-07-01"
+    flag: exit_engine
+    type: guardrail
+    status: complete
+    notes: >-
+      Deterministic thesis-grounded exit engine (hard stop / invalidation price /
+      target / trail / time-stop), all-or-nothing, tick-enforced + native RTH
+      hard-stop leg. Guardrail: no new entry signal. Measured by paired
+      counterfactual on identical entries & realized fills — risk-shape claim
+      (drawdown / book vol / force-flatten-truncation rate), NOT edge. Any
+      mean-P&L effect is soak-scrutinized like alpha.
+      RUN 1 (2026-07-20, tag exit-engine-v1): DEFECTIVE HARNESS — the episode
+      runner dropped the LLM exit levels from sim theses (fixed in ea27518), so
+      the pair compared fallback-only plans and was byte-identical on all 50
+      shared days (exact zero diff). Kept as the no-regression floor: engine
+      enforcing fallback plans reproduces legacy exactly.
+      RUN 2 (2026-07-20, tag exit-engine-v1b, post-fix): 50/50 shared episodes,
+      7 trades per cell, 1/50 days differ (H stratum). Force-flatten truncation
+      42.9% -> 28.6% (3 -> 2 of 7; the one intervention turned a blind boundary
+      flatten + judge exit into a pre-committed target + trail exit). Max
+      drawdown $106.58 -> $104.49; book vol $10.04 -> $11.22 (slightly higher);
+      paired net diff: R stratum exactly 0 (bootstrap CI [0,0]), H mean +$1.91,
+      design-weighted +$0.31/episode — single-day, far below
+      min_trades_for_economic_claim, no economic claim ("backtest disproves
+      only": nothing disproved). Verdict: no risk-shape regression; weak
+      favorable truncation signal; the evidence path for the guardrail claim
+      remains the live paper soak (5h episodes cannot exercise multi-day time
+      stops: fallback 30h > 27h episode span).

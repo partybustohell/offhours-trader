@@ -69,6 +69,29 @@ export const ConfigSchema = z.object({
       afterhours_end_hm: z.string().regex(/^\d{2}:\d{2}$/).default('18:00'),
     })
     .default({}),
+  // Entries-only blackout around scheduled binary macro events (CPI, FOMC,
+  // payrolls). Wall-clock ET, feed-independent, exits NEVER gated — the same
+  // discipline as entry_blackout, extended to a dated calendar. The calendar
+  // is static config: no API dependency, no fail-open surprise. An empty list
+  // means no gate; dates must be refreshed as agencies publish schedules
+  // (docs/RUNBOOK.md). The macro analyst's event veto operates only at thesis
+  // time (17:00 D-1); this gate is the execution-time backstop.
+  macro_event_blackout: z
+    .object({
+      enabled: z.boolean().default(true),
+      pre_min: z.number().int().min(0).max(240).default(30),
+      post_min: z.number().int().min(0).max(240).default(15),
+      events: z
+        .array(
+          z.object({
+            date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/), // ET calendar date
+            hm: z.string().regex(/^\d{2}:\d{2}$/), // ET 24h release time
+            label: z.string(),
+          }),
+        )
+        .default([]),
+    })
+    .default({}),
   // Cross-day exposure backstop in the risk gate (entries only). Sits ABOVE
   // the per-day deploy cap: bounds the total book that can accumulate over
   // multiple sessions. Gross = sum of absolute position + resting-entry +
@@ -245,6 +268,16 @@ export const ConfigSchema = z.object({
           afterhours: z.object({ max_spread_bps: z.number().positive().default(80), max_quote_age_sec: z.number().positive().default(90), min_top_size: z.number().min(0).default(100) }).default({}),
         })
         .default({}),
+      // Live short/borrow gate — ports the backtest checkShortable. Fail-closed
+      // safety gate, default ON: a short proceeds only on a shortable and
+      // (strict) easy-to-borrow name. Alpaca exposes no borrow rate, so
+      // easy-to-borrow is the live proxy for the backtest's borrow-cost model.
+      short_borrow_gate: z
+        .object({
+          enabled: z.boolean().default(true),
+          require_easy_to_borrow: z.boolean().default(true),
+        })
+        .default({}),
     })
     .default({}),
   // Book-level live risk overlays (P2), evaluated in the executor tick.
@@ -268,6 +301,25 @@ export const ConfigSchema = z.object({
       // win PROBABILITY in [0,1] — bounding it keeps calibrated conviction <=1
       // so it can never inflate a position past the per-position cap.
       table: z.array(z.object({ score: z.number(), prob: z.number().min(0).max(1) })).default([]),
+    })
+    .default({}),
+  // Deterministic exit engine (guardrail, spec 2026-07-11). enabled=true enforces
+  // structured exit levels every tick; false reproduces the legacy static-stop +
+  // judge path byte-for-byte. hard_stop_pct absent -> falls back to
+  // max_position_loss_pct at resolve time, so defaults are a no-regression.
+  exit_engine: z
+    .object({
+      enabled: z.boolean().default(true),
+      hard_stop_pct: z.number().positive().optional(),
+      // Optional tighter stop for shorts; falls back to hard_stop_pct.
+      short_hard_stop_pct: z.number().positive().optional(),
+      // Fallback timeStopHours by verdict horizon (conservative; revisit on soak).
+      horizon_hours: z
+        .object({
+          days: z.number().positive().default(30),
+          weeks: z.number().positive().default(120),
+        })
+        .default({}),
     })
     .default({}),
   model: z

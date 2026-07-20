@@ -66,6 +66,7 @@ import { clearHalt as clearHaltState, readHaltState } from '../src/state.js';
 import { riskCheck, type RiskContext } from '../src/risk.js';
 import { runTick, seedDeployedTodayUsd } from '../src/executor-loop.js';
 import { computeThesisEntries, rthThesisExpiry, thesisExpiry } from '../src/synthesis.js';
+import { mergedExitPlan } from '../src/exits.js';
 import { realizedVolAnnualized } from '../src/candidates.js';
 import { computeTickerFeatures, dailyReturns } from '../src/signals.js';
 import { NEUTRAL_REGIME, computeRegime } from '../src/regime.js';
@@ -222,7 +223,7 @@ interface AuditTallies {
   events: AuditEvent[];
   judgeVetoes: number;
   rejectionsByReason: Record<string, number>;
-  exitReasonsByTicker: Map<string, string[][]>;
+  exitReasonsByTicker: Map<string, { trigger?: string; reasons: string[] }[]>;
 }
 
 function readAuditTallies(): AuditTallies {
@@ -250,7 +251,7 @@ function readAuditTallies(): AuditTallies {
   }
   let judgeVetoes = 0;
   const rejectionsByReason: Record<string, number> = {};
-  const exitReasonsByTicker = new Map<string, string[][]>();
+  const exitReasonsByTicker = new Map<string, { trigger?: string; reasons: string[] }[]>();
   for (const e of events) {
     const data = e.data as Record<string, unknown> | undefined;
     if (e.kind === 'tick' && data?.stage === 'skip' && typeof data.reason === 'string') {
@@ -267,8 +268,9 @@ function readAuditTallies(): AuditTallies {
       const reasons = Array.isArray(data.reasons)
         ? (data.reasons as unknown[]).filter((r): r is string => typeof r === 'string')
         : [];
+      const trigger = typeof data.trigger === 'string' ? data.trigger : undefined;
       const queue = exitReasonsByTicker.get(ticker) ?? [];
-      queue.push(reasons);
+      queue.push({ trigger, reasons });
       exitReasonsByTicker.set(ticker, queue);
     }
   }
@@ -289,7 +291,7 @@ function buildTrades(
   fills: readonly FillEvent[],
   flattenCloses: readonly { ticker: string; qty: number; price: number; grossRealizedUsd: number; feesUsd: number }[],
   verdicts: VerdictFile,
-  exitReasonsByTicker: Map<string, string[][]>,
+  exitReasonsByTicker: Map<string, { trigger?: string; reasons: string[] }[]>,
   borrowTotalUsd: number,
 ): EpisodeTrade[] {
   const agreeing = (ticker: string, side: 'long' | 'short'): string[] =>
@@ -312,7 +314,14 @@ function buildTrades(
       continue;
     }
     const lot = openLots.get(ticker);
-    const reasons = exitReasonsByTicker.get(ticker)?.shift() ?? [];
+    // Engine reasons are already trigger-prefixed ('time_stop: held ...'), so
+    // exitTriggerOf classifies them bare; judge exits keep the legacy prefix.
+    const rec = exitReasonsByTicker.get(ticker)?.shift();
+    const exitReason = rec
+      ? rec.trigger && rec.trigger !== 'judge'
+        ? rec.reasons.join('; ') || rec.trigger
+        : `judge exit: ${rec.reasons.join('; ') || 'judge exit'}`
+      : 'judge exit';
     trades.push({
       ticker,
       side: lot?.side ?? (fill.side === 'sell' ? 'long' : 'short'),
@@ -323,7 +332,7 @@ function buildTrades(
       borrowUsd: 0, // apportioned below
       pnlUsd: fill.realizedUsd,
       analystsAgreeing: lot?.analystsAgreeing ?? [],
-      exitReason: reasons.length > 0 ? `judge exit: ${reasons.join('; ')}` : 'judge exit',
+      exitReason,
     });
     openLots.delete(ticker);
   }
@@ -497,6 +506,10 @@ export async function runEpisode(
         ...entry,
         narrative: n?.narrative ?? '',
         invalidationConditions: n?.invalidationConditions ?? entry.invalidationConditions,
+        // pipeline.ts parity: sanitized LLM exit levels over the deterministic
+        // fallback — without this the engine only ever enforces fallback plans
+        // in sim and the paired counterfactual is vacuous.
+        exit: mergedExitPlan(entry, n?.exit, cfg),
       };
     });
     // Borrow hard gate (plan §4): reject short entries on non-ETB symbols here,
@@ -530,6 +543,7 @@ export async function runEpisode(
     getOpenOrders: () => ledger.getOpenOrders(),
     getTodayOrders: () => ledger.getTodayOrders(),
     cancelOrdersFor: (t: string) => ledger.cancelOrdersFor(t),
+    getAsset: (t: string) => ledger.getAsset(t),
     placeLimitOrder: async (o: ProposedOrder) => {
       const [acct, openOrders, todayOrders, dailyPl] = await Promise.all([
         ledger.getAccount(),

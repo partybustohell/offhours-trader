@@ -1,13 +1,16 @@
-import type { ThesisEntry, Verdict } from '../types.js';
+import type { ExitPlan, ThesisEntry, Verdict } from '../types.js';
 import type { Config } from '../config.js';
 import { callStructured, type LlmClient } from './llm.js';
 import { SYNTH_NARRATIVE_SYSTEM } from './prompts.js';
+import { sanitizeExitPlan } from '../exits.js';
 
 export type ComputedEntry = Omit<ThesisEntry, 'narrative'>;
 
 export interface NarrativeResult {
   narrative: string;
   invalidationConditions: string[];
+  /** Sanitized structured exit levels; absent when the LLM emitted none that survived validation. */
+  exit?: Partial<ExitPlan>;
 }
 
 const NARRATIVE_SCHEMA: Record<string, unknown> = {
@@ -27,6 +30,40 @@ const NARRATIVE_SCHEMA: Record<string, unknown> = {
             type: 'array',
             items: { type: 'string' },
             description: 'Merged, deduplicated, concrete invalidation conditions',
+          },
+          exit: {
+            type: 'object',
+            description:
+              'Structured exit levels translated from the stated invalidation conditions and evidence. Omit any field the verdicts do not support.',
+            properties: {
+              hard_stop_pct: {
+                type: 'number',
+                description: 'Worst-case loss percent for this position; omit to use the desk default',
+              },
+              invalidation_price: {
+                type: 'number',
+                description:
+                  'Numeric thesis-death price (long: strictly below the entry band; short: strictly above)',
+              },
+              target_price: {
+                type: 'number',
+                description: 'Take-profit price (long: above the entry band; short: below)',
+              },
+              trail: {
+                type: 'object',
+                properties: {
+                  activate_pct: { type: 'number', description: 'Arm trailing once unrealized gain reaches this percent' },
+                  trail_pct: { type: 'number', description: 'Exit on this percent retrace from the favorable peak' },
+                },
+                required: ['activate_pct', 'trail_pct'],
+                additionalProperties: false,
+              },
+              time_stop_hours: {
+                type: 'number',
+                description: 'Exit if unresolved this many hours after entry, consistent with the verdict horizon',
+              },
+            },
+            additionalProperties: false,
           },
         },
         required: ['ticker', 'narrative', 'invalidation_conditions'],
@@ -124,9 +161,11 @@ export async function writeNarratives(
           typeof record.narrative === 'string' ? record.narrative.trim() : '';
         if (narrative === '') continue;
         const merged = stringArray(record.invalidation_conditions);
+        const exit = sanitizeExitPlan(record.exit, entry.direction, entry.limitBand);
         out.set(ticker, {
           narrative,
           invalidationConditions: merged.length > 0 ? merged : entry.invalidationConditions,
+          ...(Object.keys(exit).length > 0 ? { exit } : {}),
         });
       }
     }
