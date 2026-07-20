@@ -137,3 +137,24 @@ CPI/FOMC/payrolls release through at least the next 60 days is listed:
 
 An empty or stale calendar simply provides no gate on unlisted dates — the
 executor logs `event_blackout` skips only for dates that are present.
+
+## Dashboard exposure (Vercel + authed API)
+
+The operator dashboard is served two ways:
+
+- **Vercel (password-locked):** https://offhours-dashboard-shivs-projects-525a7e3a.vercel.app
+  — Edge middleware enforces HTTP Basic Auth (any username; password in the
+  Vercel env var `DASHBOARD_PASSWORD`). `/api/*` is proxied by a serverless
+  function that injects `Authorization: Bearer $DASHBOARD_TOKEN`; the token
+  never reaches the browser.
+- **SSH tunnel (unchanged):** `ssh -L 4310:127.0.0.1:4310 cairn-vps` — loopback
+  clients are exempt from the token, so this path needs no credentials.
+
+VPS side: `server.ts` requires `DASHBOARD_TOKEN` on network `/api` requests and
+REFUSES to start on a non-loopback `HOST` without it (src/server-auth.ts).
+`HOST=0.0.0.0` is set in the systemd drop-in
+`/etc/systemd/system/offhours-server.service.d/expose.conf`; ufw allows
+4310/tcp. The Vercel→VPS hop is plain HTTP: the bearer token rides cleartext
+on that leg. Rotate by regenerating both secrets (VPS `.env` + `vercel env`) —
+or front the VPS with a TLS tunnel and drop the ufw rule if that ever bothers
+you.

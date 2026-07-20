@@ -2,9 +2,11 @@
 // the bearer token the server requires from network clients (src/server-auth.ts).
 // The token never reaches the browser — the Edge basic-auth middleware gates
 // who can invoke this function, and the function injects the credential.
+// Path + query come from req.url (not injected query params, whose shape
+// varies by runtime).
 type Req = {
   method?: string;
-  query: Record<string, string | string[] | undefined>;
+  url?: string;
   body?: unknown;
 };
 type Res = {
@@ -21,14 +23,12 @@ export default async function handler(req: Req, res: Res): Promise<void> {
     res.status(503).json({ error: 'proxy not configured (DASHBOARD_TOKEN / DASHBOARD_UPSTREAM)' });
     return;
   }
-  const segs = req.query.path;
-  const apiPath = Array.isArray(segs) ? segs.join('/') : (segs ?? '');
-  const url = new URL(`/api/${apiPath}`, upstream);
-  for (const [key, value] of Object.entries(req.query)) {
-    if (key === 'path' || value === undefined) continue;
-    if (Array.isArray(value)) for (const v of value) url.searchParams.append(key, v);
-    else url.searchParams.set(key, value);
+  const incoming = new URL(req.url ?? '/', 'http://internal');
+  if (!incoming.pathname.startsWith('/api/')) {
+    res.status(404).json({ error: 'not an api path' });
+    return;
   }
+  const url = new URL(incoming.pathname + incoming.search, upstream);
   const method = req.method ?? 'GET';
   const hasBody = method !== 'GET' && method !== 'HEAD' && req.body !== undefined;
   const r = await fetch(url, {
