@@ -253,7 +253,7 @@ trials:
     window: "2026-01-01..2026-07-01"
     flag: exit_engine
     type: guardrail
-    status: pre-registered
+    status: complete
     notes: >-
       Deterministic thesis-grounded exit engine (hard stop / invalidation price /
       target / trail / time-stop), all-or-nothing, tick-enforced + native RTH
@@ -261,3 +261,20 @@ trials:
       counterfactual on identical entries & realized fills — risk-shape claim
       (drawdown / book vol / force-flatten-truncation rate), NOT edge. Any
       mean-P&L effect is soak-scrutinized like alpha.
+      RUN 1 (2026-07-20, tag exit-engine-v1): DEFECTIVE HARNESS — the episode
+      runner dropped the LLM exit levels from sim theses (fixed in ea27518), so
+      the pair compared fallback-only plans and was byte-identical on all 50
+      shared days (exact zero diff). Kept as the no-regression floor: engine
+      enforcing fallback plans reproduces legacy exactly.
+      RUN 2 (2026-07-20, tag exit-engine-v1b, post-fix): 50/50 shared episodes,
+      7 trades per cell, 1/50 days differ (H stratum). Force-flatten truncation
+      42.9% -> 28.6% (3 -> 2 of 7; the one intervention turned a blind boundary
+      flatten + judge exit into a pre-committed target + trail exit). Max
+      drawdown $106.58 -> $104.49; book vol $10.04 -> $11.22 (slightly higher);
+      paired net diff: R stratum exactly 0 (bootstrap CI [0,0]), H mean +$1.91,
+      design-weighted +$0.31/episode — single-day, far below
+      min_trades_for_economic_claim, no economic claim ("backtest disproves
+      only": nothing disproved). Verdict: no risk-shape regression; weak
+      favorable truncation signal; the evidence path for the guardrail claim
+      remains the live paper soak (5h episodes cannot exercise multi-day time
+      stops: fallback 30h > 27h episode span).
