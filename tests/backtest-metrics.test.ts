@@ -15,6 +15,8 @@ import {
   walkForward,
   designWeightedEstimate,
   episodeNetUsd,
+  exitBreakdown,
+  exitTriggerOf,
   expectedMaxSharpe,
   hEconomics,
   headlineEconomics,
@@ -638,5 +640,28 @@ describe('renderReport', () => {
     expect(report).toContain(INSUFFICIENT_N_NOTE);
     expect(report).toContain('bear (shorts only)');
     expect(report).toContain('force-flatten \\| D+1 20:00');
+  });
+});
+
+describe('exit attribution', () => {
+  it('classifies engine triggers, legacy strings, judge, and force-flatten', () => {
+    expect(exitTriggerOf('hard_stop: unrealized loss 8.2% >= 8%')).toBe('hard_stop');
+    expect(exitTriggerOf('stop: unrealized loss 8.2% >= max_position_loss_pct 8%')).toBe('hard_stop');
+    expect(exitTriggerOf('invalidation_price: mark 94 <= 95')).toBe('invalidation_price');
+    expect(exitTriggerOf('target: mark 110 >= 110')).toBe('target');
+    expect(exitTriggerOf('trail: retrace 2.1% from peak 106 >= 2%')).toBe('trail');
+    expect(exitTriggerOf('time_stop: held 30.2h >= 30h')).toBe('time_stop');
+    expect(exitTriggerOf('force-flatten')).toBe('force_flatten');
+    expect(exitTriggerOf('judge exit: guidance walked back')).toBe('judge');
+  });
+
+  it('tallies a breakdown over trades', () => {
+    expect(
+      exitBreakdown([
+        trade({ exitReason: 'force-flatten' }),
+        trade({ exitReason: 'force-flatten' }),
+        trade({ exitReason: 'time_stop: held 30h >= 30h' }),
+      ]),
+    ).toEqual({ force_flatten: 2, time_stop: 1 });
   });
 });

@@ -48,6 +48,32 @@ export const tradeNetUsd = (t: EpisodeTrade): number => t.pnlUsd - t.feesUsd - t
 export const episodeNetUsd = (e: EpisodeResult): number =>
   e.trades.reduce((sum, t) => sum + tradeNetUsd(t), 0);
 
+// ---------- exit attribution ----------
+
+const ENGINE_TRIGGERS = ['hard_stop', 'invalidation_price', 'target', 'trail', 'time_stop'] as const;
+
+/** Classify a TradeRow exitReason into its trigger family. Legacy 'stop:' maps
+ *  to hard_stop; anything unrecognized is a judge exit (the pre-engine default). */
+export function exitTriggerOf(exitReason: string): string {
+  if (exitReason === 'force-flatten') return 'force_flatten';
+  for (const t of ENGINE_TRIGGERS) {
+    if (exitReason === t || exitReason.startsWith(`${t}:`)) return t;
+  }
+  if (exitReason.startsWith('stop:')) return 'hard_stop';
+  return 'judge';
+}
+
+/** Count of closed trades per exit trigger family (force-flatten truncation
+ *  rate = force_flatten / total — the spec's primary risk-shape metric). */
+export function exitBreakdown(trades: EpisodeTrade[]): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const t of trades) {
+    const k = exitTriggerOf(t.exitReason);
+    out[k] = (out[k] ?? 0) + 1;
+  }
+  return out;
+}
+
 // ---------- deterministic primitives ----------
 
 /** mulberry32 PRNG: 32-bit state, uniform floats in [0, 1). */
@@ -776,7 +802,7 @@ function economicsBar(e: StratumEconomics, minTradesForClaim?: number, nTrials?:
   return lines.join('\n');
 }
 
-function behaviorSection(b: BehaviorReport): string {
+function behaviorSection(b: BehaviorReport, episodes: readonly EpisodeResult[]): string {
   const abst = b.abstention;
   const rateRow = (t: BehaviorTally): string =>
     t.fillRate === null ? 'n/a' : pct(t.fillRate);
@@ -821,7 +847,30 @@ function behaviorSection(b: BehaviorReport): string {
     rejectionTable,
     '',
     '_Dangling-at-flatten counts are a lower bound on the v1 multi-day orphan-position question (episodes force-flatten at D+1 20:00)._',
+    '',
+    '### Exit attribution',
+    '',
+    exitAttributionTable(episodes),
   ].join('\n');
+}
+
+/** Trades-by-trigger table + the force-flatten truncation rate (spec
+ *  exit-engine-v1's primary risk-shape metric). Pools both strata: this is a
+ *  mechanism tally, not an economic estimate. */
+function exitAttributionTable(episodes: readonly EpisodeResult[]): string {
+  const breakdown = exitBreakdown(episodes.flatMap((e) => e.trades));
+  const totalClosed = Object.values(breakdown).reduce((a, b) => a + b, 0);
+  const table =
+    totalClosed === 0
+      ? '_No closed trades._'
+      : mdTable(
+          ['trigger', 'trades', 'share'],
+          Object.entries(breakdown)
+            .sort((a, b) => b[1] - a[1])
+            .map(([k, v]) => [k, String(v), `${((100 * v) / totalClosed).toFixed(1)}%`]),
+        );
+  const rate = totalClosed > 0 ? ((100 * (breakdown.force_flatten ?? 0)) / totalClosed).toFixed(1) : '0.0';
+  return [table, '', `Force-flatten truncation rate: ${rate}% of closed trades.`].join('\n');
 }
 
 function attributionSection(a: AttributionReport, episodes: readonly EpisodeResult[]): string {
@@ -919,7 +968,7 @@ export function renderReport(all: MetricsBundle, meta: ReportMeta = {}): string 
     '',
     '## 4. Behavior',
     '',
-    behaviorSection(all.behavior),
+    behaviorSection(all.behavior, all.episodes),
     '',
     '## 5. Attribution',
     '',
