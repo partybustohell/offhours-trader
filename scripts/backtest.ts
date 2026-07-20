@@ -543,6 +543,17 @@ export function signalToggleCells(threshold = 0.55, bearWeight = 1.2): SweepCell
   return [
     { id: 'baseline', threshold, bearWeight },
     ...SIGNAL_ENABLERS.map((e) => ({ id: `sig-${e.flag}`, threshold, bearWeight, flag: e.flag, patch: e.patch })),
+    // Paired guardrail cell (trial exit-engine-v1): the default config ships the
+    // exit engine ON, so this cell turns it OFF. Same entries, same cached LLM
+    // inputs — the paired difference isolates the engine's risk-shape effect
+    // (drawdown / book vol / force-flatten truncation), never an edge claim.
+    {
+      id: 'guardrail-exit-engine-off',
+      threshold,
+      bearWeight,
+      flag: 'exit_engine',
+      patch: (c) => ({ ...c, exit_engine: { ...c.exit_engine, enabled: false } }),
+    },
   ];
 }
 

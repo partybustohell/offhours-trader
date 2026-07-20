@@ -30,9 +30,9 @@ describe('signal-toggle sweep cells', () => {
     expect(c.signals.anti_chase.enabled).toBe(false);
   });
 
-  it('is baseline + one cell per enabler, each enabling exactly its flag', () => {
+  it('is baseline + one cell per enabler + the exit-engine guardrail cell', () => {
     const cells = signalToggleCells();
-    expect(cells).toHaveLength(SIGNAL_ENABLERS.length + 1);
+    expect(cells).toHaveLength(SIGNAL_ENABLERS.length + 2);
 
     const ac = cellConfig(cfg, cells.find((c) => c.id === 'sig-signals.anti_chase')!);
     expect(ac.signals.anti_chase.enabled).toBe(true);
@@ -51,7 +51,8 @@ describe('signal-toggle sweep cells', () => {
   it('every non-baseline cell carries its flag for the registry gate', () => {
     for (const cell of signalToggleCells()) {
       if (cell.id === 'baseline') expect(cell.flag).toBeUndefined();
-      else expect(cell.flag).toBe(cell.id.replace(/^sig-/, ''));
+      else if (cell.id.startsWith('sig-')) expect(cell.flag).toBe(cell.id.replace(/^sig-/, ''));
+      else expect(cell.flag).toBeDefined(); // guardrail cells: flag named for the registry row
     }
   });
 
@@ -178,5 +179,16 @@ describe('aggregateSweep / writeSignalAttribution', () => {
     writeEpisode('sig-signals.amihud', episode('2026-01-05', 1));
     expect(writeSignalAttribution(TAG)).toBeNull();
     expect(fs.existsSync(path.join(outDir, TAG, 'signal-attribution.json'))).toBe(false);
+  });
+});
+
+describe('exit-engine guardrail cell', () => {
+  it('adds a paired cell that turns the engine OFF against the default-on baseline', () => {
+    const cells = signalToggleCells();
+    const cell = cells.find((c) => c.id === 'guardrail-exit-engine-off');
+    expect(cell).toBeDefined();
+    expect(cell!.flag).toBe('exit_engine');
+    const cfg = cellConfig(ConfigSchema.parse({}), cell!);
+    expect(cfg.exit_engine.enabled).toBe(false);
   });
 });
