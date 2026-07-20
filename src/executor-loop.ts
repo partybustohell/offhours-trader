@@ -9,8 +9,9 @@ import { currentSession, nowET, sessionEnabled } from './clock.js';
 import { entryTimingAllowed, sessionGate } from './session-risk.js';
 import { costScalar, drawdownThrottle, participationQty, riskOffTriggered } from './signals.js';
 import { appendAudit } from './audit.js';
+import { evaluateExit, resolveExitPlan } from './exits.js';
 import { ensureOut, OUT_DIR, readJsonIfExists, thesisPath } from './paths.js';
-import { readHaltState, updatePeakEquity, writeHalt } from './state.js';
+import { prunePositionPeaks, readHaltState, trackPositionPeak, updatePeakEquity, writeHalt } from './state.js';
 import { riskCheck, type RiskContext } from './risk.js';
 import type { BrokerClient } from './broker/client.js';
 import { AlpacaBroker } from './broker/client.js';
@@ -326,40 +327,93 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
     // (e.g. a seeded starter basket) is still stop-protected; it just cannot be
     // judged (no invalidation conditions), so only the deterministic stop runs.
     if (!quote) {
-      if (entry) skip(ticker, 'no quote for exit check');
-      else
+      if (entry) {
+        skip(ticker, 'no quote for exit check');
+        // Operator visibility: an exit-worthy position the market has gone
+        // dark on (e.g. off-hours with no SIP print). Triggers re-evaluate on
+        // the next tick that has a fresh quote.
+        appendAudit({ kind: 'tick', data: { stage: 'exit_starved', ticker, session } });
+      } else {
         appendAudit({
           kind: 'tick',
           data: { stage: 'orphan_position', ticker, note: 'no quote; stop-only monitoring' },
         });
+      }
       continue;
     }
     const isLong = position.side === 'long';
-    const lossPct = positionLossPct(position, quote);
-    const stopHit = lossPct >= cfg.max_position_loss_pct;
-
+    const mark = isLong ? quote.bid : quote.ask;
     let exitReasons: string[] | null = null;
-    if (stopHit) {
-      exitReasons = [
-        `stop: unrealized loss ${lossPct.toFixed(1)}% >= max_position_loss_pct ${cfg.max_position_loss_pct}%`,
-      ];
-    } else if (entry) {
-      const decision = await judgeTick(
-        cfg,
-        { entry, quote, headlines: headlinesFor(ticker), position },
-        deps.llm,
-      );
-      if (decision.exitPosition) exitReasons = decision.reasons;
-    } else {
-      // Orphan below its stop: monitored for the stop only, no judge.
-      appendAudit({
-        kind: 'tick',
-        data: { stage: 'orphan_position', ticker, note: 'stop-only monitoring; no thesis entry to judge' },
+    let trigger: string | undefined;
+    if (cfg.exit_engine.enabled) {
+      // Deterministic engine first (orphans run a stop-only plan — no thesis
+      // horizon, no judge: today's protection exactly). The judge is a
+      // qualitative overlay consulted only when the engine abstains.
+      const plan = entry ? resolveExitPlan(entry, cfg) : resolveExitPlan(undefined, cfg);
+      const peak = trackPositionPeak(ticker, position.side, mark, now.getTime());
+      const decision = evaluateExit({
+        direction: position.side,
+        entryPrice: position.avgEntryPrice,
+        entryTimeMs: peak.entryTimeMs,
+        markPrice: mark,
+        peakFavorablePrice: peak.peak,
+        nowMs: now.getTime(),
+        plan,
       });
-      continue;
+      if (decision.exit) {
+        exitReasons = [decision.reason ?? decision.trigger ?? 'exit'];
+        trigger = decision.trigger;
+      } else if (entry) {
+        const judged = await judgeTick(
+          cfg,
+          { entry, quote, headlines: headlinesFor(ticker), position },
+          deps.llm,
+        );
+        if (judged.exitPosition) {
+          exitReasons = judged.reasons;
+          trigger = 'judge';
+        }
+      } else {
+        appendAudit({
+          kind: 'tick',
+          data: { stage: 'orphan_position', ticker, note: 'stop-only monitoring; no thesis entry to judge' },
+        });
+        continue;
+      }
+    } else {
+      // Legacy path (exit_engine.enabled=false): static stop + judge,
+      // byte-identical to the pre-engine executor. Kept for the paired
+      // backtest counterfactual (trial exit-engine-v1).
+      const lossPct = positionLossPct(position, quote);
+      const stopHit = lossPct >= cfg.max_position_loss_pct;
+      if (stopHit) {
+        exitReasons = [
+          `stop: unrealized loss ${lossPct.toFixed(1)}% >= max_position_loss_pct ${cfg.max_position_loss_pct}%`,
+        ];
+        trigger = 'hard_stop';
+      } else if (entry) {
+        const decision = await judgeTick(
+          cfg,
+          { entry, quote, headlines: headlinesFor(ticker), position },
+          deps.llm,
+        );
+        if (decision.exitPosition) {
+          exitReasons = decision.reasons;
+          trigger = 'judge';
+        }
+      } else {
+        appendAudit({
+          kind: 'tick',
+          data: { stage: 'orphan_position', ticker, note: 'stop-only monitoring; no thesis entry to judge' },
+        });
+        continue;
+      }
     }
     if (!exitReasons) continue;
-    appendAudit({ kind: 'exit', data: { ticker, reasons: exitReasons, stop: stopHit, orphan: !entry } });
+    appendAudit({
+      kind: 'exit',
+      data: { ticker, reasons: exitReasons, trigger, stop: trigger === 'hard_stop', orphan: !entry },
+    });
     // Cancel any resting order for this ticker first — notably an RTH stop-loss
     // leg — so the exit doesn't race a still-live protective order.
     await broker.cancelOrdersFor(ticker);
@@ -386,6 +440,12 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
       appendAudit({ kind: 'order_rejected', data: { order, reasons: risk.reasons } });
       summary.rejected++;
     }
+  }
+
+  // Trailing state hygiene: drop peak records for names no longer held. Gated
+  // on the engine flag so the flag-off path writes no new artifact.
+  if (cfg.exit_engine.enabled) {
+    prunePositionPeaks(account.positions.map((p) => p.ticker.toUpperCase()));
   }
 
   // Entries-only timing blackout (feed-independent wall-clock gate). Exits
@@ -474,11 +534,14 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
     }
     // Regular-session entries carry a native broker stop-loss (Alpaca executes
     // stops in RTH but not extended hours). Long: stop below entry; short: above.
+    // The leg uses the entry's RESOLVED hard stop so the resting broker stop and
+    // the tick check agree (falls back to max_position_loss_pct when bare).
+    const entryHardStopPct = resolveExitPlan(entry, cfg).hardStopPct;
     const stopLoss =
       session === 'rth'
         ? entry.direction === 'long'
-          ? Math.round(limitPrice * (1 - cfg.max_position_loss_pct / 100) * 100) / 100
-          : Math.round(limitPrice * (1 + cfg.max_position_loss_pct / 100) * 100) / 100
+          ? Math.round(limitPrice * (1 - entryHardStopPct / 100) * 100) / 100
+          : Math.round(limitPrice * (1 + entryHardStopPct / 100) * 100) / 100
         : undefined;
     const order: ProposedOrder = {
       ticker: entry.ticker,

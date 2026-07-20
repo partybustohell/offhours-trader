@@ -447,8 +447,9 @@ describe('episode 1: fills, judge exit, and the D+1 17:05 episode boundary', () 
       ep1Stub(),
     );
     expect(res.trades).toHaveLength(1);
-    expect(res.trades[0]!.exitReason).toContain('stop: unrealized loss');
-    expect(res.trades[0]!.exitReason).toContain('max_position_loss_pct 8%');
+    // Engine path (default-on): the deterministic hard stop, not the judge.
+    expect(res.trades[0]!.exitReason).toContain('hard_stop: unrealized loss');
+    expect(res.trades[0]!.exitReason).toContain('>= 8%');
   });
 
   it('applies the production narrative merge and writes both thesis files', () => {
