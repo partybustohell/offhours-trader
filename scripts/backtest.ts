@@ -566,6 +566,24 @@ export function cellConfig(cfg: Config, cell: SweepCell): Config {
   return cell.patch ? cell.patch(base) : base;
 }
 
+/**
+ * Restrict a sweep to named cells (--cells a,b). Registry accounting is
+ * per evaluated cell, so a paired guardrail comparison (baseline +
+ * guardrail-exit-engine-off) must not silently re-price the 13 signal cells —
+ * that would be a new search campaign over the sig flags. Unknown ids throw:
+ * a typo must not degrade into an unintended full sweep.
+ */
+export function filterCells(cells: SweepCell[], csv: string | undefined): SweepCell[] {
+  if (!csv) return cells;
+  const wanted = csv.split(',').map((s) => s.trim()).filter((s) => s !== '');
+  const byId = new Map(cells.map((c) => [c.id, c]));
+  const unknown = wanted.filter((id) => !byId.has(id));
+  if (unknown.length > 0) {
+    throw new Error(`--cells: unknown cell id(s) ${unknown.join(', ')} (known: ${cells.map((c) => c.id).join(', ')})`);
+  }
+  return wanted.map((id) => byId.get(id)!);
+}
+
 export function collectEpisodeResults(dir: string): EpisodeResult[] {
   let names: string[] = [];
   try {
@@ -800,6 +818,7 @@ export async function sweepCommand(
   feedOverride?: 'iex' | 'sip',
   noBlackout = false,
   budgetLimit = SWEEP_BUDGET_LIMIT,
+  cellsCsv?: string,
 ): Promise<void> {
   const sample = loadSample();
   // The backtest tick loop selects its QUOTE feed from BACKTEST_QUOTE_FEED
@@ -826,7 +845,7 @@ export async function sweepCommand(
   // 'signals' mode: baseline vs one-signal-on cells (disprove funnel). Signals
   // aren't in the LLM prompt, so all cells share the cached LLM calls -> the
   // fresh-call budget stays ~baseline regardless of cell count.
-  let cells = mode === 'signals' ? signalToggleCells(signalThreshold) : sweepCells();
+  let cells = filterCells(mode === 'signals' ? signalToggleCells(signalThreshold) : sweepCells(), cellsCsv);
 
   // Pre-registration gate: the sweep is exactly where unregistered search
   // happens, so refuse to run cells whose flags have no type:alpha registry
@@ -1157,6 +1176,7 @@ async function main(): Promise<void> {
       flagValue('feed') === 'sip' ? 'sip' : flagValue('feed') === 'iex' ? 'iex' : undefined,
       hasFlag('no-blackout'),
       numFlag('budget-limit'),
+      flagValue('cells'),
     );
     return;
   }

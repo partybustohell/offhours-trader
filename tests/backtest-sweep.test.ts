@@ -8,6 +8,7 @@ import {
   SIGNAL_ENABLERS,
   aggregateSweep,
   cellConfig,
+  filterCells,
   signalToggleCells,
   writeSignalAttribution,
   type SweepResultsFile,
@@ -190,5 +191,17 @@ describe('exit-engine guardrail cell', () => {
     expect(cell!.flag).toBe('exit_engine');
     const cfg = cellConfig(ConfigSchema.parse({}), cell!);
     expect(cfg.exit_engine.enabled).toBe(false);
+  });
+});
+
+describe('filterCells (--cells)', () => {
+  it('selects exactly the named cells in the given order', () => {
+    const picked = filterCells(signalToggleCells(), 'baseline,guardrail-exit-engine-off');
+    expect(picked.map((c) => c.id)).toEqual(['baseline', 'guardrail-exit-engine-off']);
+  });
+
+  it('no csv returns all cells; unknown ids throw', () => {
+    expect(filterCells(signalToggleCells(), undefined)).toHaveLength(signalToggleCells().length);
+    expect(() => filterCells(signalToggleCells(), 'baseline,nope')).toThrow(/unknown cell id/);
   });
 });
