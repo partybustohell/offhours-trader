@@ -67,3 +67,31 @@ export function sessionGate(session: Session, cfg: Config): SessionGate {
   if (!s) return flat;
   return { maxSpreadBps: s.max_spread_bps, maxQuoteAgeSec: s.max_quote_age_sec, minTopSize: s.min_top_size };
 }
+
+export interface MacroEvent {
+  date: string;
+  hm: string;
+  label: string;
+}
+
+/**
+ * The scheduled macro event whose blackout window covers this ET instant, or
+ * null. Window: [release - pre_min, release + post_min). Purely a function of
+ * the ET clock and config — no market data, identical on IEX and SIP. ENTRIES
+ * ONLY: exits must never be gated by this (same contract as entryTimingAllowed).
+ * US macro releases all land well inside a single ET calendar day, so windows
+ * never straddle midnight.
+ */
+export function activeEventBlackout(
+  et: { ymd: string; minutes: number },
+  cfg: Pick<Config, 'macro_event_blackout'>,
+): MacroEvent | null {
+  const b = cfg.macro_event_blackout;
+  if (!b.enabled) return null;
+  for (const ev of b.events) {
+    if (ev.date !== et.ymd) continue;
+    const t = hmToMinutes(ev.hm);
+    if (et.minutes >= t - b.pre_min && et.minutes < t + b.post_min) return ev;
+  }
+  return null;
+}
