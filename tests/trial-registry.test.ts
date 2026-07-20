@@ -114,12 +114,14 @@ describe('trial registry', () => {
     expect(unregisteredEnabledAlphaFlags(cfg, loadTrialRegistry(p))).toEqual(['signals.anti_chase']);
   });
 
-  it('guardrail rows never register sweep flags', () => {
+  it('guardrail rows register sweep flags (paired risk-shape cells) but never live enables', () => {
     write([{ id: 'g', flag: 'signals.gap', flags: ['signals.amihud'], type: 'guardrail', status: 's' }]);
-    expect(unregisteredSweepFlags(['signals.gap', 'signals.amihud'], loadTrialRegistry(p)).sort()).toEqual([
-      'signals.amihud',
-      'signals.gap',
-    ]);
+    const trials = loadTrialRegistry(p);
+    // Sweep gate: covered — a guardrail sweep still requires pre-registration.
+    expect(unregisteredSweepFlags(['signals.gap', 'signals.amihud'], trials)).toEqual([]);
+    // Live gate: NOT covered — enabling live still needs a type:alpha row.
+    const cfg = ConfigSchema.parse({ signals: { gap: { enabled: true } } });
+    expect(unregisteredEnabledAlphaFlags(cfg, trials)).toEqual(['signals.gap']);
   });
 
   it('the checked-in registry is valid and the DSR correction is not inert (nTrials >> 1)', () => {
@@ -235,5 +237,30 @@ describe('mechanism gate (three sentences before a row authorizes work)', () => 
     // mechanism-bearing campaign row lands, update this expectation deliberately.
     const t = loadTrialRegistry(TRIAL_REGISTRY_PATH);
     expect(sweepFlagsLackingMechanism(['signals.amihud'], t)).toEqual(['signals.amihud']);
+  });
+});
+
+describe('guardrail sweep coverage (paired risk-shape cells)', () => {
+  it('a guardrail row registers its flag for the sweep gate', () => {
+    write([{ id: 'exit-engine-v1', flag: 'exit_engine', type: 'guardrail', status: 'pre-registered' }]);
+    expect(unregisteredSweepFlags(['exit_engine'], loadTrialRegistry(p))).toEqual([]);
+  });
+
+  it('a guardrail row authorizes its sweep without a mechanism (risk control, not edge)', () => {
+    write([{ id: 'exit-engine-v1', flag: 'exit_engine', type: 'guardrail', status: 'pre-registered' }]);
+    expect(sweepFlagsLackingMechanism(['exit_engine'], loadTrialRegistry(p))).toEqual([]);
+  });
+
+  it('an unregistered guardrail flag still refuses the sweep', () => {
+    write([]);
+    expect(unregisteredSweepFlags(['exit_engine'], loadTrialRegistry(p))).toEqual(['exit_engine']);
+  });
+
+  it('guardrail rows never count toward nTrials', () => {
+    write([
+      { id: 'exit-engine-v1', flag: 'exit_engine', type: 'guardrail', status: 'pre-registered', cells: 2 },
+      { id: 'a', flag: 'signals.amihud', type: 'alpha', status: 's', cells: 3 },
+    ]);
+    expect(alphaTrialCount(loadTrialRegistry(p))).toBe(3);
   });
 });

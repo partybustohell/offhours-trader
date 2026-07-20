@@ -248,3 +248,16 @@ trials:
       enabledDate when the implementation lands (before any result is read);
       any backtest search against this flag requires bumping cells here or
       appending a campaign row first.
+  - id: exit-engine-v1
+    date: "2026-07-15"
+    window: "2026-01-01..2026-07-01"
+    flag: exit_engine
+    type: guardrail
+    status: pre-registered
+    notes: >-
+      Deterministic thesis-grounded exit engine (hard stop / invalidation price /
+      target / trail / time-stop), all-or-nothing, tick-enforced + native RTH
+      hard-stop leg. Guardrail: no new entry signal. Measured by paired
+      counterfactual on identical entries & realized fills — risk-shape claim
+      (drawdown / book vol / force-flatten-truncation rate), NOT edge. Any
+      mean-P&L effect is soak-scrutinized like alpha.

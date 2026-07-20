@@ -71,14 +71,17 @@ export function alphaTrialCount(trials: Trial[]): number {
 
 /**
  * Flags covered by a backtest-search registration: the union of `flag` and
- * `flags` over alpha rows. Used by the SWEEP gate only — a campaign row's
- * `flags` list registers backtest search, not live deployment; the live
- * preflight gate matches `flag` exactly.
+ * `flags` over ALL rows (alpha searches and guardrail risk-shape cells alike —
+ * every sweep must be pre-registered). Used by the SWEEP gate only — a
+ * campaign row's `flags` list registers backtest search, not live deployment;
+ * the live preflight gate matches type:alpha `flag` exactly and is unaffected.
  */
 export function registeredSweepFlags(trials: Trial[]): Set<string> {
   const out = new Set<string>();
   for (const t of trials) {
-    if (t.type !== 'alpha') continue;
+    // Guardrail rows register their flag too: a paired risk-shape cell (e.g.
+    // exit_engine on/off) is still a sweep that must be pre-registered. They
+    // stay outside nTrials — risk-shape claims are not edge searches.
     out.add(t.flag);
     for (const f of t.flags ?? []) out.add(f);
   }
@@ -128,7 +131,9 @@ export function mechanismProblems(t: Trial): string[] {
   return out;
 }
 
-const authorizesWork = (t: Trial): boolean => t.type === 'alpha' && mechanismProblems(t).length === 0;
+// Guardrail rows authorize their own sweep with no mechanism (risk controls,
+// not edge hypotheses); alpha rows require the three sentences.
+const authorizesWork = (t: Trial): boolean => mechanismProblems(t).length === 0;
 
 /**
  * Sweep flags whose registry coverage is entirely mechanism-less: registered
