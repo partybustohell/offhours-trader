@@ -149,7 +149,7 @@ interface JudgeDecision {
 }
 
 function makeStub(opts: {
-  narratives: { ticker: string; narrative: string; invalidation_conditions: string[] }[] | 'throw';
+  narratives: { ticker: string; narrative: string; invalidation_conditions: string[]; exit?: Record<string, unknown> }[] | 'throw';
   judge?: (ticker: string, asOf: string) => JudgeDecision;
 }): LlmClient {
   return {
@@ -374,6 +374,9 @@ const ep1Stub = (): LlmClient =>
         ticker: 'LONGA',
         narrative: 'Long LONGA narrative.',
         invalidation_conditions: ['LONGA breaks 47 (merged)'],
+        // Levels far outside the recorded tape: thesis content must carry them
+        // without changing any episode's realized behavior.
+        exit: { invalidation_price: 40, target_price: 60 },
       },
       {
         ticker: 'BANDB',
@@ -455,11 +458,21 @@ describe('episode 1: fills, judge exit, and the D+1 17:05 episode boundary', () 
   it('applies the production narrative merge and writes both thesis files', () => {
     const thesis = JSON.parse(
       fs.readFileSync(path.join(DIR1, 'out', `thesis-${EP1.day}.json`), 'utf8'),
-    ) as { entries: { ticker: string; narrative: string; invalidationConditions: string[] }[] };
+    ) as { entries: { ticker: string; narrative: string; invalidationConditions: string[]; exit?: unknown }[] };
     expect(thesis.entries.map((e) => e.ticker)).toEqual(['LONGA', 'BANDB']);
     expect(thesis.entries[0]!.narrative).toBe('Long LONGA narrative.');
     // synthesizer's merged list OVERRIDES the computed invalidation conditions
     expect(thesis.entries[0]!.invalidationConditions).toEqual(['LONGA breaks 47 (merged)']);
+    // production exit merge (pipeline.ts parity): sanitized LLM levels over the
+    // deterministic fallback (hard stop = CFG's 50, days-horizon 30h time stop)
+    expect(thesis.entries[0]!.exit).toEqual({
+      hardStopPct: 50,
+      timeStopHours: 30,
+      invalidationPrice: 40,
+      target: 60,
+    });
+    // no LLM exit block -> fallback-only plan
+    expect(thesis.entries[1]!.exit).toEqual({ hardStopPct: 50, timeStopHours: 30 });
 
     const synthetic = JSON.parse(
       fs.readFileSync(path.join(DIR1, 'out', `thesis-${EP1.next}.json`), 'utf8'),

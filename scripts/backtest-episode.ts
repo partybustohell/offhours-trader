@@ -66,6 +66,7 @@ import { clearHalt as clearHaltState, readHaltState } from '../src/state.js';
 import { riskCheck, type RiskContext } from '../src/risk.js';
 import { runTick, seedDeployedTodayUsd } from '../src/executor-loop.js';
 import { computeThesisEntries, rthThesisExpiry, thesisExpiry } from '../src/synthesis.js';
+import { mergedExitPlan } from '../src/exits.js';
 import { realizedVolAnnualized } from '../src/candidates.js';
 import { computeTickerFeatures, dailyReturns } from '../src/signals.js';
 import { NEUTRAL_REGIME, computeRegime } from '../src/regime.js';
@@ -505,6 +506,10 @@ export async function runEpisode(
         ...entry,
         narrative: n?.narrative ?? '',
         invalidationConditions: n?.invalidationConditions ?? entry.invalidationConditions,
+        // pipeline.ts parity: sanitized LLM exit levels over the deterministic
+        // fallback — without this the engine only ever enforces fallback plans
+        // in sim and the paired counterfactual is vacuous.
+        exit: mergedExitPlan(entry, n?.exit, cfg),
       };
     });
     // Borrow hard gate (plan §4): reject short entries on non-ETB symbols here,
