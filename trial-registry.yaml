@@ -248,6 +248,160 @@ trials:
       enabledDate when the implementation lands (before any result is read);
       any backtest search against this flag requires bumping cells here or
       appending a campaign row first.
+  # ---- 2026-07-27: execution-hygiene enables. SEQUENCING VIOLATION LOGGED:
+  # these four flags were enabled and deployed the morning of 2026-07-27 and
+  # registered here the same day AFTER the fact (the preflight gate caught it).
+  # Registered honestly rather than backdated. They are cost controls on our
+  # own order flow, not edge hypotheses — the mechanism sentences below say so
+  # plainly: the "counterparty" is whoever we pay the spread to, and there is
+  # no friction to defend because nothing here predicts returns.
+  - id: exec-cost-scalar-2026-07-27
+    date: "2026-07-27"
+    flag: execution.cost_scalar
+    type: alpha
+    status: enabled
+    enabledDate: "2026-07-27"
+    mechanism:
+      counterparty: >-
+        Liquidity providers quoting the spread we would otherwise cross at
+        full size when the book is wide.
+      whyTheyPay: >-
+        They do not pay us — we pay them half the spread per crossing order,
+        and shrinking size when the quoted spread is wide mechanically reduces
+        that payment on our own flow.
+      friction: >-
+        None claimed and none needed: this is cost avoidance on our own
+        orders, not a return prediction anyone must fail to arbitrage away.
+    notes: "Down-only size haircut vs live spread (floor 0.5, 45bps ref). Evaluate in the soak via realized spread paid per trade, not P&L."
+  - id: exec-participation-2026-07-27
+    date: "2026-07-27"
+    flag: execution.participation
+    type: alpha
+    status: enabled
+    enabledDate: "2026-07-27"
+    mechanism:
+      counterparty: >-
+        The displayed top-of-book liquidity our marketable child order would
+        sweep through when it exceeds the quoted size.
+      whyTheyPay: >-
+        Nobody pays us — walking the book past the displayed size pays MORE
+        than the touch, and capping the child at 25% of displayed size bounds
+        that worst-case impact on our own executions.
+      friction: >-
+        None claimed: impact avoidance on our own flow is not an edge and
+        requires no barrier to persist.
+    notes: "Qty cap at 25% of displayed take-side size. Evaluate via fill quality, not P&L."
+  - id: exec-gates-by-session-2026-07-27
+    date: "2026-07-27"
+    flag: execution.gates_by_session
+    type: alpha
+    status: enabled
+    enabledDate: "2026-07-27"
+    mechanism:
+      counterparty: >-
+        Off-hours books quoting wide or stale markets where a flat 50bps gate
+        admitted entries the regular-session gate never would.
+      whyTheyPay: >-
+        Nobody pays us — session-calibrated spread, quote-age, and top-size
+        gates refuse executions whose round-trip cost predictably exceeds any
+        plausible edge, avoiding a known cost rather than earning a return.
+      friction: >-
+        None claimed: refusing bad fills on our own flow needs no protection
+        from arbitrage.
+    notes: "SIP-only session gates (rth 20bps/20s/100, pre+ah 80bps/90s/100). WATCH: min_top_size units (shares vs round lots) — health report flags entry starvation."
+  - id: exec-entry-aggressiveness-2026-07-27
+    date: "2026-07-27"
+    flag: execution.entry_aggressiveness
+    type: alpha
+    status: enabled
+    enabledDate: "2026-07-27"
+    mechanism:
+      counterparty: >-
+        The passive side of the spread that earns the half-spread whenever our
+        entry order crosses instead of resting.
+      whyTheyPay: >-
+        They stop being paid by us — resting halfway inside the spread
+        converts us from taker to part-maker on fills, trading certainty of
+        execution for lower cost per executed share.
+      friction: >-
+        None claimed: the trade-off is unfilled entries (re-evaluated next
+        tick, no chasing), a cost we accept on our own flow, not an edge.
+    notes: "0.5 = rest mid-spread. Evaluate via fill rate + effective spread paid; if fill rate collapses the setting reverts to 1.0 (pre-committed fallback)."
+  # ---- 2026-07-27: catalyst-first candidate sourcing (REGISTERED BEFORE the
+  # code path first runs in production — the flag ships enabled with this row).
+  - id: earnings-scan-2026-07-27
+    date: "2026-07-27"
+    flag: universe.earnings_scan
+    type: alpha
+    status: enabled
+    enabledDate: "2026-07-27"
+    horizonDays: 180
+    targetActiveN: 50
+    mechanism:
+      counterparty: >-
+        Holders who reprice earnings news slowly after the print, and the
+        movers-list crowd that only discovers a name AFTER its reaction has
+        already run.
+      whyTheyPay: >-
+        Post-earnings-announcement drift: anchored holders absorb the surprise
+        over days, so evaluating scheduled reporters BEFORE the print lets the
+        panel act in the first hours of the reaction instead of nominating
+        yesterday's movers after the easy part is gone.
+      friction: >-
+        The desk's off-hours execution window is exactly where institutional
+        size cannot comfortably operate, and movers-list-driven retail flow
+        arrives structurally late by construction.
+    notes: >-
+      Shares its economic thesis with the pre-registered
+      earnings-underreaction-smallcap row (signals.event_reaction) — this is
+      the INFORMATION-PROVISION half (calendar into the analyst scans; the
+      panel still decides), not the deterministic signal half. Fail-open
+      Nasdaq calendar. Evaluate: fraction of entries originating from
+      scan-sourced nominations and their outcomes vs movers-sourced, in the
+      feedback report, once >=50 OOS trades exist.
+  # ---- 2026-07-27: soak reset + PRE-REGISTERED DECISION RULES for the window.
+  - id: soak-reset-2026-07-27
+    date: "2026-07-27"
+    flag: soak-2026-07-27
+    type: guardrail
+    status: in-force
+    flags:
+      - exit_engine.trail_debounce
+      - entry_cooldown_after_exit
+      - judge_cache
+      - execution.earnings_guard
+      - universe.news_content
+      - model.analysts_by_name
+    notes: >-
+      Soak window reset 2026-07-27 (commit a809bb1 + Tier-1/2 follow-up):
+      threshold 0.50, half sizes, SIP bars + $50M consolidated ADV floor,
+      7-day thesis lookup / 14-day exit-entry lookup / exits_only ticks, OCO
+      exit legs, trail debounce, re-entry cooldown, judge cache, +1% breakeven
+      arm removed, earnings guard, news content, shadow signal logging.
+      PRE-REGISTERED DECISION RULES (written before any outcome data from this
+      window exists):
+      (1) MODEL FREEZE — analysts/executor claude-sonnet-5, synthesizer
+      claude-opus-4-8 are frozen for the window; these are fixed IDs with no
+      dated variants (verified 2026-07-27), so the control is this rule: ANY
+      model change resets the OOS closed-trade counter to zero.
+      (2) ENABLE ORDER — first candidate regime.trend, second
+      signals.anti_chase; ONE signal per >=50-OOS-trade window; a signal is
+      enabled only if its SHADOW log over the window shows its interventions
+      would have improved outcomes (for regime.trend: trades taken while the
+      shadow regime read hostile/risk_off underperformed trades taken while
+      benign; for anti_chase: entries it would have haircut underperformed
+      those it would not have).
+      (3) KILL RULE — a signal whose shadow interventions correlate with
+      BETTER-performing trades (it would have cut winners) is killed without
+      a live trial.
+      (4) CALIBRATION/WEIGHTS — apply the feedback report's table/weights at
+      most QUARTERLY, only when closedTrades >= calibration.min_trades, by
+      manual config edit.
+      (5) JUDGE REMOVAL — if avgForgone across >=30 scored judge vetoes sits
+      within +/-0.5% (no predictive value), the judge comes OFF the entry
+      path (pre-committed simplification; cost + determinism win).
+      (6) analysts_by_name stays EMPTY until a per-persona model A/B is
+      registered as its own row and run as a paired backtest.
   - id: exit-engine-v1
     date: "2026-07-15"
     window: "2026-01-01..2026-07-01"

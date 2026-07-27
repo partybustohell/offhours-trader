@@ -5,7 +5,7 @@ import type { Config } from './config.js';
 import { loadConfig } from './config.js';
 import { nowET } from './clock.js';
 import { appendAudit } from './audit.js';
-import { candidatesPath, thesisPath, verdictsPath, writeJsonAtomic } from './paths.js';
+import { candidatesPath, readJsonIfExists, thesisPath, verdictsPath, writeJsonAtomic } from './paths.js';
 import { buildCandidates, type TickerMarketInfo } from './candidates.js';
 import { computeThesisEntries, thesisExpiry, rthThesisExpiry } from './synthesis.js';
 import { computeRegime, NEUTRAL_REGIME } from './regime.js';
@@ -14,11 +14,13 @@ import type { ThesisKind } from './types.js';
 import type { BrokerClient } from './broker/client.js';
 import { AlpacaBroker } from './broker/client.js';
 import { AlpacaMarketData, type NewsItem } from './broker/marketdata.js';
-import { runNominations } from './agents/nominate.js';
+import { runNominations, type EarningsScanItem, type Scans } from './agents/nominate.js';
 import { runVerdicts } from './agents/verdicts.js';
 import { writeNarratives } from './agents/narrative.js';
 import type { LlmClient } from './agents/llm.js';
 import { mergedExitPlan } from './exits.js';
+import { loadEarningsCalendar, ymdRange } from './broker/earnings.js';
+import { shadowEntryRecord, shadowPortfolioScalar, shadowRegime } from './shadow.js';
 
 export interface PipelineDeps {
   cfg?: Config;
@@ -27,6 +29,26 @@ export interface PipelineDeps {
   llm?: LlmClient;
   now?: Date;
   kind?: ThesisKind; // 'offhours' (default, evening) | 'rth' (morning)
+}
+
+/**
+ * Same-day thesis refresh safety (the 16:35 early pass + 17:05 main pass both
+ * write the same file): entries from the PREVIOUS same-day thesis whose ticker
+ * is currently held or has a resting order are CARRIED into the refreshed
+ * thesis when the new run didn't re-emit them. Without this, the overwrite
+ * would orphan a position opened from the earlier pass — its entry-carried
+ * exit plan (invalidation price, target, time stop) would silently vanish.
+ * Carried entries keep their original narrative and exit plan. Pure.
+ */
+export function carryoverEntries(
+  previous: ThesisEntry[],
+  fresh: ThesisEntry[],
+  activeTickers: Set<string>,
+): ThesisEntry[] {
+  const freshTickers = new Set(fresh.map((e) => e.ticker.toUpperCase()));
+  return previous.filter(
+    (e) => activeTickers.has(e.ticker.toUpperCase()) && !freshTickers.has(e.ticker.toUpperCase()),
+  );
 }
 
 function groupNewsBySymbol(news: NewsItem[], tickers: string[]): Map<string, NewsItem[]> {
@@ -72,9 +94,49 @@ export async function runPipeline(deps: PipelineDeps = {}): Promise<Thesis> {
   const moverBars =
     moverSymbols.length > 0 ? Object.fromEntries(await md.getDailyBars(moverSymbols)) : {};
 
+  // Catalyst scan (universe.earnings_scan): names scheduled to report today
+  // post-close and tomorrow pre-open, so the panel can be EARLY on a catalyst
+  // instead of late to its reaction. Fail-open: degraded dates are audited and
+  // the scan is simply absent.
+  let earningsScan: Scans['earnings'];
+  if (cfg.universe.earnings_scan.enabled) {
+    const [todayEt, tomorrowEt] = ymdRange(now, 1) as [string, string];
+    const { days, degraded } = await loadEarningsCalendar(1, now);
+    if (degraded.length > 0) {
+      appendAudit({
+        kind: 'tick',
+        data: { stage: 'earnings_calendar_degraded', dates: degraded, note: 'scan proceeds without those dates (fail-open)' },
+      });
+    }
+    const toItem = (e: { symbol: string; name: string; time: EarningsScanItem['time'] }): EarningsScanItem => ({
+      symbol: e.symbol,
+      name: e.name,
+      time: e.time,
+    });
+    const postToday = (days[todayEt] ?? []).filter((e) => e.time === 'post').map(toItem);
+    const preTomorrow = (days[tomorrowEt] ?? []).filter((e) => e.time === 'pre').map(toItem);
+    if (postToday.length > 0 || preTomorrow.length > 0) {
+      earningsScan = { reportingPostCloseToday: postToday, reportingPreOpenTomorrow: preTomorrow };
+      appendAudit({
+        kind: 'tick',
+        data: {
+          stage: 'earnings_scan',
+          postCloseToday: postToday.length,
+          preOpenTomorrow: preTomorrow.length,
+        },
+      });
+    }
+  }
+
   const round1 = await runNominations(
     cfg,
-    { movers, mostActives, news, barsBySymbol: moverBars },
+    {
+      movers,
+      mostActives,
+      news,
+      barsBySymbol: moverBars,
+      ...(earningsScan ? { earnings: earningsScan } : {}),
+    },
     deps.llm,
   );
   for (const an of round1.nominations) {
@@ -101,13 +163,46 @@ export async function runPipeline(deps: PipelineDeps = {}): Promise<Thesis> {
     },
   });
 
+  // Broker state is needed for sizing AND for the same-day carryover merge
+  // (held/ordered tickers), including on the empty-candidate path — a barren
+  // refresh must not orphan positions opened from an earlier same-day pass.
+  const broker = deps.broker ?? new AlpacaBroker(cfg);
+  const [account, openOrders] = await Promise.all([broker.getAccount(), broker.getOpenOrders()]);
+  const activeTickers = new Set([
+    ...account.positions.map((p) => p.ticker.toUpperCase()),
+    ...openOrders.map((o) => o.ticker.toUpperCase()),
+  ]);
+  const readPreviousSameDay = (): Thesis | null => {
+    try {
+      return readJsonIfExists<Thesis>(thesisPath(ymd, kind));
+    } catch {
+      return null; // corrupt previous file: refresh proceeds without carryover
+    }
+  };
+  const withCarryover = (fresh: ThesisEntry[]): ThesisEntry[] => {
+    const previous = readPreviousSameDay();
+    if (!previous) return fresh;
+    const carried = carryoverEntries(previous.entries, fresh, activeTickers);
+    if (carried.length > 0) {
+      appendAudit({
+        kind: 'tick',
+        data: {
+          stage: 'carried_entries',
+          tickers: carried.map((e) => e.ticker),
+          note: 'held/ordered entries preserved across same-day thesis refresh',
+        },
+      });
+    }
+    return [...fresh, ...carried];
+  };
+
   if (candidateFile.candidates.length === 0) {
     const empty: Thesis = {
       date: ymd,
       kind,
       generatedAt: now.toISOString(),
       expiresAt,
-      entries: [],
+      entries: withCarryover([]),
       skipped: [],
     };
     writeJsonAtomic(thesisPath(ymd, kind), empty);
@@ -120,7 +215,14 @@ export async function runPipeline(deps: PipelineDeps = {}): Promise<Thesis> {
   // ADV and realized vol stay on their trailing-20 windows inside marketInfoFor.
   const [featureBarsBySymbol, candidateNews, spyBarsMap] = await Promise.all([
     md.getDailyBars(candidateTickers, 260),
-    md.getNews(50, candidateTickers),
+    // Verdict-round news optionally carries the stripped article BODY
+    // (universe.news_content) — primary text beats headline+summary for
+    // reading guidance language. Nomination-round news above is unchanged.
+    md.getNews(
+      50,
+      candidateTickers,
+      cfg.universe.news_content.enabled ? cfg.universe.news_content.max_chars : 0,
+    ),
     md.getDailyBars(['SPY'], 260),
   ]);
   // The analyst summarizer (verdicts.ts summarizeBars) reduces high/low/avgVolume
@@ -163,8 +265,6 @@ export async function runPipeline(deps: PipelineDeps = {}): Promise<Thesis> {
     appendAudit({ kind: 'verdict', data: { analyst, dropped: true } });
   }
 
-  const broker = deps.broker ?? new AlpacaBroker(cfg);
-  const account = await broker.getAccount();
   const computed = computeThesisEntries(
     verdictFile.verdicts,
     enrichedInfo,
@@ -173,6 +273,48 @@ export async function runPipeline(deps: PipelineDeps = {}): Promise<Thesis> {
     regime,
     returnsByTicker,
   );
+
+  // Shadow-mode evaluation of the flag-off signals (src/shadow.ts): what each
+  // would have done to this thesis, params frozen at schema defaults, nothing
+  // applied. Audit-only — this is the out-of-sample evidence the 50-trade
+  // governance gate will read before any signal is enabled.
+  const spyCloses = spyBars.map((b) => b.c);
+  const shadowReg = shadowRegime(spyCloses, cfg);
+  appendAudit({
+    kind: 'counterfactual',
+    data: {
+      note: 'SHADOW book-level (flag-off, schema-default params)',
+      date: ymd,
+      thesisKind: kind,
+      regime: {
+        state: shadowReg.state,
+        longScalar: shadowReg.longScalar,
+        shortScalar: shadowReg.shortScalar,
+        volScalar: shadowReg.volScalar,
+        thresholdBump: shadowReg.thresholdBump,
+      },
+      portfolioTargetVolScalar: shadowPortfolioScalar(
+        computed.entries,
+        returnsByTicker,
+        account.equity,
+        cfg,
+      ),
+    },
+  });
+  for (const e of computed.entries) {
+    const agreeing = verdictFile.verdicts
+      .filter((v) => v.ticker.toUpperCase() === e.ticker && v.direction === e.direction)
+      .map((v) => v.conviction);
+    appendAudit({
+      kind: 'counterfactual',
+      data: {
+        note: 'SHADOW signal evaluation (flag-off, schema-default params)',
+        date: ymd,
+        thesisKind: kind,
+        ...shadowEntryRecord(e.ticker, e.direction, enrichedInfo.get(e.ticker), agreeing, cfg),
+      },
+    });
+  }
 
   const narratives = await writeNarratives(cfg, computed.entries, verdictFile.verdicts, deps.llm);
   const entries: ThesisEntry[] = computed.entries.map((entry) => {
@@ -194,7 +336,7 @@ export async function runPipeline(deps: PipelineDeps = {}): Promise<Thesis> {
     kind,
     generatedAt: now.toISOString(),
     expiresAt,
-    entries,
+    entries: withCarryover(entries),
     skipped: computed.skipped,
     regime: {
       state: regime.state,

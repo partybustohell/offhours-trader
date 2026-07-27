@@ -11,6 +11,17 @@ universe:
   # while widening the universe far beyond the accidental mega-cap filter.
   min_avg_dollar_volume: 50000000
   exclude: []
+  # Catalyst-first sourcing (2026-07-27, registry row earnings-scan-2026-07-27):
+  # today's post-close + tomorrow's pre-open scheduled reporters go into the
+  # fundamental/sentiment/bear scans, so the panel is early to catalysts
+  # instead of late to their reactions. Fail-open on calendar outage.
+  earnings_scan:
+    enabled: true
+  # Verdict round reads the stripped article BODY, not just headline+summary
+  # (guidance language is where the panel can out-read keyword scanners).
+  news_content:
+    enabled: true
+    max_chars: 1500
 sessions:
   premarket: true       # re-enabled 2026-07-14 (SIP feed now covers off-hours)
   afterhours: true      # re-enabled 2026-07-14 (SIP feed now covers off-hours)
@@ -134,6 +145,13 @@ execution:
   entry_aggressiveness: 0.5
   gates_by_session:
     enabled: true            # SIP-only session-calibrated spread/age/size gates (rth 20bps, pre/ah 80bps)
+  # Own-earnings guard (entries only; exits never gated): don't OPEN a position
+  # on a name reporting within 2 days — holding into the print is the largest
+  # single gap risk a position faces. Held positions reporting within 1 day get
+  # an earnings_warning audit (visibility; no forced flatten). Fails open.
+  earnings_guard:
+    enabled: true
+    block_days_ahead: 2
 # Re-entry cooldown: never re-buy a name the same day it was exited/stopped.
 entry_cooldown_after_exit: true
 # Cache judge decisions on (entry, headlines, position side) — unchanged
@@ -159,6 +177,12 @@ min_trades_for_economic_claim: 50
 # calibration.*, and signal_scalar_floor. See docs/superpowers/specs. Example:
 # signals:
 #   anti_chase: { enabled: true }   # override just the fields you want ----
+# MODEL FREEZE (soak-reset-2026-07-27, rule 1): these IDs are frozen for the
+# soak evaluation window. They are fixed model IDs with no dated snapshot
+# variants (verified 2026-07-27), so stationarity is enforced by rule, not by
+# pinning: ANY change here resets the OOS closed-trade counter to zero.
+# Per-persona overrides (model.analysts_by_name) stay unset until a paired
+# backtest is registered (rule 6).
 model:
   analysts: claude-sonnet-5
   synthesizer: claude-opus-4-8

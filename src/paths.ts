@@ -25,6 +25,10 @@ export const peaksPath = () => path.join(OUT_DIR, 'position-peaks.json');
 /** Executor-judge decision cache (key -> { decision, atMs }); see
  *  config judge_cache. Corrupt or missing degrades to cache-miss. */
 export const judgeCachePath = () => path.join(OUT_DIR, 'judge-cache.json');
+/** Judge cache hit/miss counters for the health report. */
+export const judgeStatsPath = () => path.join(OUT_DIR, 'judge-stats.json');
+/** Earnings-calendar disk cache ({ fetchedAtMs, days }); 12h TTL, fail-open. */
+export const earningsCachePath = () => path.join(OUT_DIR, 'earnings-cache.json');
 
 export function writeJsonAtomic(file: string, data: unknown): void {
   ensureOut();

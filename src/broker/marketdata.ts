@@ -26,6 +26,31 @@ export interface NewsItem {
   symbols: string[];
   created_at: string;
   source: string;
+  /** HTML-stripped, truncated article body; only when requested (verdict round). */
+  content?: string;
+}
+
+/**
+ * Strip HTML to readable text: drop tags, decode common entities, collapse
+ * whitespace, truncate to maxChars at a word boundary. Deliberately naive —
+ * the output feeds an LLM prompt, not a renderer.
+ */
+export function stripHtmlContent(html: string, maxChars: number): string {
+  const text = html
+    .replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (text.length <= maxChars) return text;
+  const cut = text.slice(0, maxChars);
+  const lastSpace = cut.lastIndexOf(' ');
+  return `${cut.slice(0, lastSpace > maxChars * 0.8 ? lastSpace : maxChars)}…`;
 }
 export interface DailyBar {
   o: number;
@@ -59,6 +84,7 @@ interface RawNews {
   symbols?: string[];
   created_at?: string;
   source?: string;
+  content?: string;
 }
 
 function chunk<T>(items: T[], size: number): T[][] {
@@ -118,9 +144,15 @@ export class AlpacaMarketData {
     return raw.most_actives ?? [];
   }
 
-  async getNews(limit = 50, symbols?: string[]): Promise<NewsItem[]> {
+  /**
+   * `contentMaxChars` > 0 additionally requests the article BODY and returns
+   * it HTML-stripped and truncated (verdict round only — the nomination round
+   * stays headline+summary so its prompts and caches are unchanged).
+   */
+  async getNews(limit = 50, symbols?: string[], contentMaxChars = 0): Promise<NewsItem[]> {
     const params = new URLSearchParams({ limit: String(limit) });
     if (symbols && symbols.length > 0) params.set('symbols', symbols.join(','));
+    if (contentMaxChars > 0) params.set('include_content', 'true');
     const raw = (await this.request(`/v1beta1/news?${params.toString()}`)) as {
       news?: RawNews[];
     };
@@ -130,6 +162,9 @@ export class AlpacaMarketData {
       symbols: n.symbols ?? [],
       created_at: n.created_at ?? '',
       source: n.source ?? '',
+      ...(contentMaxChars > 0 && n.content
+        ? { content: stripHtmlContent(n.content, contentMaxChars) }
+        : {}),
     }));
   }
 

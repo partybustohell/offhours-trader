@@ -13,6 +13,26 @@ export const ConfigSchema = z.object({
       min_price: z.number().positive().default(5),
       min_avg_dollar_volume: z.number().positive().default(20_000_000),
       exclude: z.array(z.string()).default([]),
+      // Catalyst-first candidate sourcing: feed the scheduled earnings calendar
+      // (today's post-close + tomorrow's pre-open reporters) into the analyst
+      // scans, so the panel can evaluate names BEFORE the reaction instead of
+      // only after they show up on the movers list (adverse selection at the
+      // source). Fail-open: a calendar fetch failure yields an empty scan and
+      // is audited; nothing blocks. Registered alpha flag (trial-registry.yaml
+      // earnings-scan-2026-07-27; mechanism shared with
+      // earnings-underreaction-smallcap). Default OFF for backtest parity.
+      earnings_scan: z.object({ enabled: z.boolean().default(false) }).default({}),
+      // Pass the news article BODY (HTML-stripped, truncated) to the verdict
+      // round, not just headline+summary — reading guidance language in the
+      // primary text is the one capability an LLM panel has over keyword
+      // scanners. Information upgrade only; no parameters to fit. Changes the
+      // verdict prompt bytes, so backtest LLM caches re-run when enabled.
+      news_content: z
+        .object({
+          enabled: z.boolean().default(false),
+          max_chars: z.number().int().min(200).max(10_000).default(1500),
+        })
+        .default({}),
     })
     .default({}),
   sessions: z
@@ -278,6 +298,22 @@ export const ConfigSchema = z.object({
           require_easy_to_borrow: z.boolean().default(true),
         })
         .default({}),
+      // Own-earnings guard (entries only, same family as macro_event_blackout):
+      // never OPEN a position on a name scheduled to report within
+      // block_days_ahead days — holding into the print is the largest single
+      // gap-risk event a position faces. Exits are never gated. A held position
+      // reporting within 1 day gets an `earnings_warning` audit (visibility;
+      // forced flattening is deliberately NOT implemented — exit-path changes
+      // go through the paired-backtest discipline). Calendar source is the
+      // shared earnings cache (src/broker/earnings.ts); fetch failure fails
+      // OPEN like the risk_off SPY fetch (core risk gates still apply), with
+      // an audit line. Guardrail (risk control, not an edge signal).
+      earnings_guard: z
+        .object({
+          enabled: z.boolean().default(false),
+          block_days_ahead: z.number().int().min(0).max(10).default(2),
+        })
+        .default({}),
     })
     .default({}),
   // Book-level live risk overlays (P2), evaluated in the executor tick.
@@ -382,6 +418,22 @@ export const ConfigSchema = z.object({
       analysts: z.string().default('claude-sonnet-5'),
       synthesizer: z.string().default('claude-fable-5'),
       executor: z.string().default('claude-sonnet-5'),
+      // Per-persona model overrides for ensemble diversity experiments: a set
+      // analyst uses its own model, unset analysts fall back to `analysts`.
+      // Ships EMPTY (no live change) — enabling is an A/B decision that goes
+      // through a paired backtest per the trial registry, not taste. NOTE:
+      // model IDs are frozen for the duration of a soak evaluation window
+      // (registry row soak-reset-2026-07-27) — a mid-soak model change makes
+      // the OOS sample non-stationary and resets the trade counter.
+      analysts_by_name: z
+        .object({
+          fundamental: z.string().optional(),
+          technical: z.string().optional(),
+          macro: z.string().optional(),
+          sentiment: z.string().optional(),
+          bear: z.string().optional(),
+        })
+        .default({}),
     })
     .default({}),
 });

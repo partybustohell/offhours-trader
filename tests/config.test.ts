@@ -34,6 +34,9 @@ describe('ConfigSchema defaults', () => {
       min_price: 5,
       min_avg_dollar_volume: 20_000_000,
       exclude: [],
+      // catalyst scan + primary-text defaults: off (backtest parity)
+      earnings_scan: { enabled: false },
+      news_content: { enabled: false, max_chars: 1500 },
     });
     expect(cfg.sessions).toEqual({ premarket: true, afterhours: true, regularhours: false });
     expect(cfg.agent_weights).toEqual({
@@ -58,6 +61,7 @@ describe('ConfigSchema defaults', () => {
       analysts: 'claude-sonnet-5',
       synthesizer: 'claude-fable-5',
       executor: 'claude-sonnet-5',
+      analysts_by_name: {}, // per-persona overrides ship empty
     });
     // quant P0 knobs
     expect(cfg.deploy_priority).toBe('conviction');

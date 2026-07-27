@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { analystStats, fitCalibration, pairRoundTrips, proposeWeights, type RoundTrip } from '../src/feedback.js';
+import {
+  analystStats,
+  attributeExitTriggers,
+  fitCalibration,
+  pairRoundTrips,
+  postExitFollowthrough,
+  proposeWeights,
+  scoreJudgeVeto,
+  type ExitEvent,
+  type RoundTrip,
+} from '../src/feedback.js';
 import type { FillActivity } from '../src/broker/client.js';
 import type { Verdict } from '../src/types.js';
 
@@ -92,6 +102,65 @@ describe('fitCalibration (pool-adjacent-violators)', () => {
 
   it('empty in, empty out', () => {
     expect(fitCalibration([])).toEqual([]);
+  });
+});
+
+describe('attributeExitTriggers + postExitFollowthrough + scoreJudgeVeto', () => {
+  const trip: RoundTrip = {
+    ticker: 'GS',
+    direction: 'long',
+    qty: 10,
+    entryAvgPrice: 100,
+    exitAvgPrice: 105,
+    openedAt: '2026-07-20T14:00:00Z',
+    closedAt: '2026-07-21T15:00:00Z',
+    returnPct: 5,
+    realizedPnlUsd: 50,
+  };
+
+  it('attributes the nearest same-ticker exit event before the fill', () => {
+    const events: ExitEvent[] = [
+      { tsMs: Date.parse('2026-07-21T14:59:30Z'), ticker: 'GS', trigger: 'trail' },
+      { tsMs: Date.parse('2026-07-20T14:30:00Z'), ticker: 'GS', trigger: 'judge' }, // day before — outside window
+      { tsMs: Date.parse('2026-07-21T14:59:45Z'), ticker: 'XOM', trigger: 'hard_stop' }, // other ticker
+    ];
+    expect(attributeExitTriggers([trip], events)).toEqual(['trail']);
+  });
+
+  it("attributes 'native_stop_fill' when no executor exit event matches (broker-side GTC stop)", () => {
+    expect(attributeExitTriggers([trip], [])).toEqual(['native_stop_fill']);
+  });
+
+  it('signs follow-through so positive = money left on the table', () => {
+    // Long exited at 105; price kept rising to 110 (d1) and 112 (d3): positive.
+    expect(postExitFollowthrough(trip, [110, 111, 112])).toEqual({
+      d1: 4.7619,
+      d3: 6.6667,
+    });
+    // Short exited at 105; price rising is the exit DODGING loss: negative.
+    expect(postExitFollowthrough({ direction: 'short', exitAvgPrice: 105 }, [110])).toEqual({
+      d1: -4.7619,
+    });
+    expect(postExitFollowthrough(trip, [])).toEqual({});
+  });
+
+  it('scores a judge veto from the decline-day close, direction-aware', () => {
+    const closes = [
+      { ymd: '2026-07-20', c: 100 },
+      { ymd: '2026-07-21', c: 103 },
+      { ymd: '2026-07-22', c: 104 },
+      { ymd: '2026-07-23', c: 106 },
+    ];
+    // Vetoed long that would have won: positive forgone.
+    expect(scoreJudgeVeto({ ticker: 'GS', ymd: '2026-07-20', direction: 'long' }, closes)).toEqual({
+      forgone1d: 3,
+      forgone3d: 6,
+    });
+    // Vetoed short on the same tape: the veto saved money (negative forgone).
+    expect(
+      scoreJudgeVeto({ ticker: 'GS', ymd: '2026-07-20', direction: 'short' }, closes),
+    ).toEqual({ forgone1d: -3, forgone3d: -6 });
+    expect(scoreJudgeVeto({ ticker: 'GS', ymd: '2026-08-01', direction: 'long' }, closes)).toEqual({});
   });
 });
 

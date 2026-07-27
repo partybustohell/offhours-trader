@@ -17,6 +17,7 @@ import { riskCheck, type RiskContext } from './risk.js';
 import type { BrokerClient } from './broker/client.js';
 import { AlpacaBroker } from './broker/client.js';
 import { AlpacaMarketData, type NewsItem } from './broker/marketdata.js';
+import { earningsWithin, loadEarningsCalendar, ymdRange, type EarningsByDate } from './broker/earnings.js';
 import { judgeTick } from './agents/judge.js';
 import type { LlmClient } from './agents/llm.js';
 
@@ -247,6 +248,28 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
       }
     } catch {
       // SPY fetch failure -> no freeze (overlay fails open; core risk gates still apply).
+    }
+  }
+
+  // Own-earnings guard data (execution.earnings_guard): scheduled reports for
+  // [today .. today+block_days_ahead]. Disk-cached with a 12h TTL so most
+  // ticks never touch the network; a degraded fetch fails OPEN (entries admit,
+  // audited) like the risk_off SPY fetch — core risk gates still apply.
+  let earningsDays: EarningsByDate = {};
+  let earningsYmds: string[] = [];
+  if (cfg.execution.earnings_guard.enabled) {
+    earningsYmds = ymdRange(now, cfg.execution.earnings_guard.block_days_ahead);
+    const calendar = await loadEarningsCalendar(cfg.execution.earnings_guard.block_days_ahead, now);
+    earningsDays = calendar.days;
+    if (calendar.degraded.length > 0) {
+      appendAudit({
+        kind: 'tick',
+        data: {
+          stage: 'earnings_calendar_degraded',
+          dates: calendar.degraded,
+          note: 'own-earnings guard fails open for those dates',
+        },
+      });
     }
   }
 
@@ -606,6 +629,29 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
     prunePositionPeaks(account.positions.map((p) => p.ticker.toUpperCase()));
   }
 
+  // Held-position earnings visibility: a position reporting within 1 day is
+  // the largest single overnight-gap exposure on the book. Audit only — exits
+  // are never forced here (exit-path changes go through the paired-backtest
+  // discipline); the entries-only guard below keeps NEW risk out.
+  if (cfg.execution.earnings_guard.enabled) {
+    for (const position of account.positions) {
+      const ticker = position.ticker.toUpperCase();
+      const report = earningsWithin(earningsDays, ticker, earningsYmds, 1);
+      if (report) {
+        appendAudit({
+          kind: 'tick',
+          data: {
+            stage: 'earnings_warning',
+            ticker,
+            reportYmd: report.ymd,
+            time: report.time,
+            note: 'held position reports within 1 day; operator visibility only',
+          },
+        });
+      }
+    }
+  }
+
   // Native protective-stop ratchet: converge each position's resting GTC stop
   // toward the trail floor (hard stop until armed, then breakeven / peak
   // trail). Runs AFTER exits — a risk-rejected exit falls through to here and
@@ -733,6 +779,19 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
     ) {
       skip(ticker, 're-entry cooldown: exited today');
       continue;
+    }
+    // Own-earnings guard (entries only): never OPEN into a scheduled report.
+    if (cfg.execution.earnings_guard.enabled) {
+      const report = earningsWithin(
+        earningsDays,
+        ticker,
+        earningsYmds,
+        cfg.execution.earnings_guard.block_days_ahead,
+      );
+      if (report) {
+        skip(ticker, `own-earnings guard: reports ${report.ymd} (${report.time})`);
+        continue;
+      }
     }
     const quote = quoteByTicker.get(ticker);
     if (!quote) {

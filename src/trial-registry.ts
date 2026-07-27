@@ -183,6 +183,9 @@ export function enabledAlphaFlagsLackingMechanism(cfg: Config, trials: Trial[]):
  * risk controls, not edge trials.
  */
 export const ALPHA_FLAGS: { flag: string; enabled: (c: Config) => boolean }[] = [
+  // Catalyst-first candidate sourcing changes WHAT the panel sees, hence what
+  // gets selected — that is an edge claim and gates like one.
+  { flag: 'universe.earnings_scan', enabled: (c) => c.universe.earnings_scan.enabled },
   { flag: 'signals.anti_chase', enabled: (c) => c.signals.anti_chase.enabled },
   { flag: 'signals.amihud', enabled: (c) => c.signals.amihud.enabled },
   { flag: 'signals.dispersion', enabled: (c) => c.signals.dispersion.enabled },

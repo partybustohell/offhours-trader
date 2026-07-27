@@ -393,6 +393,41 @@ describe('re-entry cooldown after an exit', () => {
   });
 });
 
+describe('own-earnings entry guard', () => {
+  it('blocks a new entry on a name reporting inside the window; degrades open on no data', async () => {
+    const thesis = fslrThesis({ hardStopPct: 8, timeStopHours: 240 });
+    thesis.entries[0]!.direction = 'long';
+    thesis.entries[0]!.limitBand = { low: 215, high: 225 };
+    writeThesis(thesis);
+    // Fresh cache covering today..+2 with FSLR reporting tomorrow post-close.
+    fs.writeFileSync(
+      path.join(dir, 'out', 'earnings-cache.json'),
+      JSON.stringify({
+        fetchedAtMs: NOW.getTime(),
+        days: {
+          '2026-07-15': [],
+          '2026-07-16': [{ symbol: 'FSLR', name: 'First Solar', time: 'post' }],
+          '2026-07-17': [],
+        },
+      }),
+    );
+    const cfg = baseCfg();
+    cfg.execution.earnings_guard.enabled = true;
+    judgeTick.mockResolvedValue({ proceed: true, exitPosition: false, reasons: ['holds'] });
+    const placed: ProposedOrder[] = [];
+    await runTick({
+      cfg,
+      now: NOW,
+      broker: fakeBroker({ equity: 100000, cash: 100000, positions: [] }, placed),
+      marketData: fakeMd([quote('FSLR', 219.0, 219.1)]),
+      llm: {} as never,
+    });
+    expect(placed).toHaveLength(0);
+    expect(readAudit()).toContain('own-earnings guard: reports 2026-07-16 (post)');
+    expect(judgeTick).not.toHaveBeenCalled(); // gated before the LLM spend
+  });
+});
+
 describe('macro-event entry blackout', () => {
   it('blocks entries inside the window but still places exits', async () => {
     // 09:00 ET on 2026-07-15 with a 09:15 event: inside [08:45, 09:30).

@@ -12,6 +12,7 @@
     "ensure-stops:apply": "tsx scripts/ensure-stops.ts --apply",
     "preflight": "tsx scripts/preflight.ts",
     "feedback": "tsx scripts/feedback-report.ts",
+    "health": "tsx scripts/health-report.ts",
     "test:backend": "vitest run",
     "test:frontend": "pnpm --dir frontend test",
     "test": "pnpm test:backend && pnpm test:frontend",

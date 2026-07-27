@@ -16,8 +16,21 @@ import { pathToFileURL } from 'node:url';
 import { loadConfig } from '../src/config.js';
 import { nowET } from '../src/clock.js';
 import { AlpacaBroker } from '../src/broker/client.js';
+import { AlpacaMarketData } from '../src/broker/marketdata.js';
 import { OUT_DIR, readJsonIfExists, thesisPath, verdictsPath, writeJsonAtomic } from '../src/paths.js';
-import { analystStats, fitCalibration, pairRoundTrips, proposeWeights, type RoundTrip } from '../src/feedback.js';
+import { readAuditEvents } from '../src/audit-read.js';
+import {
+  analystStats,
+  attributeExitTriggers,
+  fitCalibration,
+  pairRoundTrips,
+  postExitFollowthrough,
+  proposeWeights,
+  scoreJudgeVeto,
+  type ExitEvent,
+  type JudgeVeto,
+  type RoundTrip,
+} from '../src/feedback.js';
 import type { Thesis, ThesisKind, Verdict, VerdictFile } from '../src/types.js';
 
 const DAY_MS = 86_400_000;
@@ -71,6 +84,113 @@ export async function main(): Promise<void> {
   const fills = await broker.getFills(since.toISOString());
   const trips = pairRoundTrips(fills);
 
+  // ---- exit-trigger attribution + judge-veto scoring (Tier-1 measurement) --
+  const sinceYmd = since.toISOString().slice(0, 10);
+  const audits = readAuditEvents(sinceYmd);
+  const exitEvents: ExitEvent[] = audits
+    .filter((a) => a.kind === 'exit' && typeof a.data.ticker === 'string')
+    .map((a) => ({
+      tsMs: Date.parse(a.ts),
+      ticker: String(a.data.ticker),
+      ...(typeof a.data.trigger === 'string' ? { trigger: a.data.trigger } : {}),
+    }));
+  const triggers = attributeExitTriggers(trips, exitEvents);
+
+  const vetoesRaw = audits.filter(
+    (a) =>
+      a.kind === 'tick' &&
+      a.data.stage === 'skip' &&
+      typeof a.data.ticker === 'string' &&
+      typeof a.data.reason === 'string' &&
+      (a.data.reason as string).startsWith('judge declined'),
+  );
+  const vetoes: JudgeVeto[] = [];
+  for (const v of vetoesRaw) {
+    const ticker = String(v.data.ticker).toUpperCase();
+    const ymd = nowET(new Date(v.ts)).ymd;
+    // Direction from the thesis the executor was trading that day.
+    let direction: 'long' | 'short' | undefined;
+    for (const kind of ['rth', 'offhours'] as ThesisKind[]) {
+      const t = readQuiet<Thesis>(thesisPath(ymd, kind));
+      const entry = t?.entries.find((e) => e.ticker.toUpperCase() === ticker);
+      if (entry) {
+        direction = entry.direction;
+        break;
+      }
+    }
+    if (direction) vetoes.push({ ticker, ymd, direction });
+  }
+
+  // Daily closes for follow-through and veto scoring (fail-soft: no bars ->
+  // those fields stay absent from the report).
+  const barTickers = [
+    ...new Set([...trips.map((t) => t.ticker), ...vetoes.map((v) => v.ticker)]),
+  ];
+  let closesByTicker = new Map<string, { ymd: string; c: number }[]>();
+  if (barTickers.length > 0) {
+    try {
+      const md = new AlpacaMarketData(process.env, globalThis.fetch, undefined, cfg.data_feed);
+      const bars = await md.getDailyBars(barTickers, 40);
+      closesByTicker = new Map(
+        [...bars].map(([sym, list]) => [
+          sym.toUpperCase(),
+          list.map((b) => ({ ymd: b.t.slice(0, 10), c: b.c })),
+        ]),
+      );
+    } catch (err) {
+      console.error(`bars fetch failed (follow-through omitted): ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  const followthroughs = trips.map((trip) => {
+    const closedYmd = nowET(new Date(trip.closedAt)).ymd;
+    const closesAfter = (closesByTicker.get(trip.ticker.toUpperCase()) ?? [])
+      .filter((b) => b.ymd > closedYmd)
+      .map((b) => b.c);
+    return postExitFollowthrough(trip, closesAfter);
+  });
+  const byTrigger: Record<
+    string,
+    { n: number; avgReturnPct: number; avgPostExit1dPct?: number; avgPostExit3dPct?: number }
+  > = {};
+  trips.forEach((trip, i) => {
+    const key = triggers[i]!;
+    const bucket = (byTrigger[key] ??= { n: 0, avgReturnPct: 0 });
+    bucket.n += 1;
+    bucket.avgReturnPct += trip.returnPct;
+  });
+  for (const [key, bucket] of Object.entries(byTrigger)) {
+    bucket.avgReturnPct = Math.round((bucket.avgReturnPct / bucket.n) * 10_000) / 10_000;
+    const d1s = trips
+      .map((_, i) => (triggers[i] === key ? followthroughs[i]!.d1 : undefined))
+      .filter((x): x is number => x !== undefined);
+    const d3s = trips
+      .map((_, i) => (triggers[i] === key ? followthroughs[i]!.d3 : undefined))
+      .filter((x): x is number => x !== undefined);
+    if (d1s.length > 0)
+      bucket.avgPostExit1dPct = Math.round((d1s.reduce((s, x) => s + x, 0) / d1s.length) * 10_000) / 10_000;
+    if (d3s.length > 0)
+      bucket.avgPostExit3dPct = Math.round((d3s.reduce((s, x) => s + x, 0) / d3s.length) * 10_000) / 10_000;
+  }
+
+  const vetoScores = vetoes.map((v) =>
+    scoreJudgeVeto(v, closesByTicker.get(v.ticker.toUpperCase()) ?? []),
+  );
+  const scored1 = vetoScores.map((s) => s.forgone1d).filter((x): x is number => x !== undefined);
+  const scored3 = vetoScores.map((s) => s.forgone3d).filter((x): x is number => x !== undefined);
+  const judgeVetoSummary = {
+    n: vetoes.length,
+    scored: scored1.length,
+    avgForgone1dPct:
+      scored1.length > 0
+        ? Math.round((scored1.reduce((s, x) => s + x, 0) / scored1.length) * 10_000) / 10_000
+        : null,
+    avgForgone3dPct:
+      scored3.length > 0
+        ? Math.round((scored3.reduce((s, x) => s + x, 0) / scored3.length) * 10_000) / 10_000
+        : null,
+    note: 'positive forgone = the vetoed trade would have WON (the veto cost money); persistent ~zero means the judge adds no value and is a removal candidate',
+  };
+
   const joined = trips.map((trip) => ({ trip, ...joinThesis(trip) }));
   const scored = joined.filter((j) => j.conviction !== undefined);
   const samples = scored.map((j) => ({ score: j.conviction!, win: j.trip.returnPct > 0 }));
@@ -106,7 +226,12 @@ export async function main(): Promise<void> {
       eligible,
       note: 'apply by editing agent_weights in config.yaml — ONLY once eligible; sub-10-verdict analysts keep current weight',
     },
-    trips,
+    exitTriggers: {
+      byTrigger,
+      note: 'avgPostExit1d/3dPct signed so POSITIVE = position kept moving our way after exit (money left on table); trail/time_stop rows with big positives mean exits fire too early',
+    },
+    judgeVetoes: judgeVetoSummary,
+    trips: trips.map((t, i) => ({ ...t, trigger: triggers[i], postExit: followthroughs[i] })),
     governance:
       'REPORT ONLY. Nothing is auto-applied. Governance gate: calibration.min_trades OOS closed trades before any table/weight change ships.',
   };
@@ -120,6 +245,14 @@ export async function main(): Promise<void> {
   for (const [analyst, s] of Object.entries(stats)) {
     console.log(`  ${analyst.padEnd(11)} n=${String(s.n).padStart(3)} hitRate=${(s.hitRate * 100).toFixed(1)}%  weight ${cfg.agent_weights[analyst as keyof typeof cfg.agent_weights]} -> proposed ${proposed[analyst as keyof typeof proposed]}`);
   }
+  for (const [trigger, b] of Object.entries(byTrigger)) {
+    console.log(
+      `  exit ${trigger.padEnd(16)} n=${String(b.n).padStart(3)} avgRet=${b.avgReturnPct.toFixed(2)}%  postExit d1=${b.avgPostExit1dPct?.toFixed(2) ?? 'n/a'}% d3=${b.avgPostExit3dPct?.toFixed(2) ?? 'n/a'}%`,
+    );
+  }
+  console.log(
+    `  judge vetoes: n=${judgeVetoSummary.n} scored=${judgeVetoSummary.scored} avgForgone d1=${judgeVetoSummary.avgForgone1dPct ?? 'n/a'}% d3=${judgeVetoSummary.avgForgone3dPct ?? 'n/a'}%`,
+  );
   console.log(`  report: ${outFile}`);
 }
 

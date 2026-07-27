@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import type { Position, QuoteSnapshot, ThesisEntry } from '../types.js';
 import type { Config } from '../config.js';
-import { judgeCachePath, readJsonIfExists, writeJsonAtomic } from '../paths.js';
+import { judgeCachePath, judgeStatsPath, readJsonIfExists, writeJsonAtomic } from '../paths.js';
 import { callStructured, type LlmClient } from './llm.js';
 import { EXECUTOR_JUDGE_SYSTEM } from './prompts.js';
 import type { NewsItem } from './nominate.js';
@@ -77,6 +77,21 @@ function readCache(): JudgeCacheFile {
   }
 }
 
+/** Hit/miss counters for the health report. Best-effort; failures ignored. */
+function bumpStats(field: 'hits' | 'misses'): void {
+  try {
+    const raw = readJsonIfExists<{ hits?: number; misses?: number }>(judgeStatsPath());
+    const stats = {
+      hits: typeof raw?.hits === 'number' ? raw.hits : 0,
+      misses: typeof raw?.misses === 'number' ? raw.misses : 0,
+    };
+    stats[field] += 1;
+    writeJsonAtomic(judgeStatsPath(), { ...stats, atMs: Date.now() });
+  } catch {
+    // stats must never affect a trading decision
+  }
+}
+
 function isCachedDecision(v: unknown): v is CachedDecision {
   if (v === null || typeof v !== 'object') return false;
   const c = v as CachedDecision;
@@ -106,8 +121,10 @@ export async function judgeTick(
   if (useCache) {
     const hit = readCache()[key];
     if (hit && isCachedDecision(hit) && Date.now() - hit.atMs <= maxAgeMs) {
+      bumpStats('hits');
       return hit.decision;
     }
+    bumpStats('misses');
   }
   try {
     const user = [

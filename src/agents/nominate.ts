@@ -26,6 +26,13 @@ export interface NewsItem {
   symbols: string[];
   created_at: string;
   source: string;
+  /** Stripped article body; present only on verdict-round candidate news. */
+  content?: string;
+}
+export interface EarningsScanItem {
+  symbol: string;
+  name: string;
+  time: 'pre' | 'post' | 'unknown';
 }
 export interface Scans {
   movers: MoversScan;
@@ -33,6 +40,14 @@ export interface Scans {
   news: NewsItem[];
   /** Daily bars for mover symbols; consumed by the technical analyst. */
   barsBySymbol?: Record<string, unknown>;
+  /** Catalyst scan (universe.earnings_scan): names scheduled to report today
+   *  post-close / tomorrow pre-open — the panel evaluates them BEFORE the
+   *  reaction instead of after they hit the movers list. Absent when the
+   *  flag is off or the calendar fetch degraded (fail-open). */
+  earnings?: {
+    reportingPostCloseToday: EarningsScanItem[];
+    reportingPreOpenTomorrow: EarningsScanItem[];
+  };
 }
 
 export interface NominationRound {
@@ -41,17 +56,22 @@ export interface NominationRound {
 }
 
 function payloadFor(analyst: AnalystName, scans: Scans): Record<string, unknown> {
+  // Earnings-calendar scan goes to the analysts whose purview covers
+  // catalysts: fundamental (their highest-signal events), sentiment (fresh
+  // reaction plays), bear (binary-event risk inside the horizon). Technical
+  // reads bars, macro reads the macro calendar — neither gets it.
+  const earnings = scans.earnings ? { scheduledEarnings: scans.earnings } : {};
   switch (analyst) {
     case 'fundamental':
-      return { news: scans.news, mostActives: scans.mostActives };
+      return { news: scans.news, mostActives: scans.mostActives, ...earnings };
     case 'technical':
       return { movers: scans.movers, mostActives: scans.mostActives, bars: scans.barsBySymbol ?? {} };
     case 'macro':
       return { movers: scans.movers, news: scans.news };
     case 'sentiment':
-      return { news: scans.news };
+      return { news: scans.news, ...earnings };
     case 'bear':
-      return { movers: scans.movers, mostActives: scans.mostActives, news: scans.news };
+      return { movers: scans.movers, mostActives: scans.mostActives, news: scans.news, ...earnings };
   }
 }
 
@@ -124,7 +144,10 @@ export async function runNominations(
 
       const raw = await callStructured<unknown>(
         {
-          model: cfg.model.analysts,
+          // Per-persona override for ensemble-diversity trials; falls back to
+          // the shared analysts model (the shipped default — overrides are an
+          // A/B decision gated by the trial registry).
+          model: cfg.model.analysts_by_name[analyst] ?? cfg.model.analysts,
           system: ANALYST_SYSTEM[analyst],
           user,
           toolName: 'submit_nominations',

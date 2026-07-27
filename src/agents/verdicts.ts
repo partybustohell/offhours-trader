@@ -149,6 +149,9 @@ export async function runVerdicts(
       summary: n.summary,
       created_at: n.created_at,
       source: n.source,
+      // Primary text (universe.news_content): stripped article body so the
+      // panel reads actual guidance language, not just the headline.
+      ...(n.content ? { content: n.content } : {}),
     })),
   }));
 
@@ -163,7 +166,8 @@ export async function runVerdicts(
     ANALYSTS.map(async (analyst): Promise<Verdict[]> => {
       const raw = await callStructured<unknown>(
         {
-          model: cfg.model.analysts,
+          // Per-persona override (ensemble diversity); default falls back.
+          model: cfg.model.analysts_by_name[analyst] ?? cfg.model.analysts,
           system: ANALYST_SYSTEM[analyst],
           user,
           toolName: 'submit_verdicts',

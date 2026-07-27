@@ -188,6 +188,96 @@ export function analystStats(
   return out;
 }
 
+// ---- exit-trigger attribution + judge-veto scoring (pure) ------------------
+
+/** One kind:'exit' audit record, pre-parsed by the caller. */
+export interface ExitEvent {
+  tsMs: number;
+  ticker: string;
+  trigger?: string;
+}
+
+/**
+ * Attribute each closed trip to the exit trigger that caused it: the nearest
+ * exit audit event for the same ticker in [closedAt - 90min, closedAt + 5min]
+ * (the audit precedes the fill; GTC stop fills the executor never saw have no
+ * event and attribute to 'native_stop_fill'). Pure.
+ */
+export function attributeExitTriggers(trips: RoundTrip[], events: ExitEvent[]): string[] {
+  const byTicker = new Map<string, ExitEvent[]>();
+  for (const e of events) {
+    const key = e.ticker.toUpperCase();
+    byTicker.set(key, [...(byTicker.get(key) ?? []), e]);
+  }
+  return trips.map((trip) => {
+    const closedMs = new Date(trip.closedAt).getTime();
+    const candidates = (byTicker.get(trip.ticker.toUpperCase()) ?? []).filter(
+      (e) => e.tsMs >= closedMs - 90 * 60_000 && e.tsMs <= closedMs + 5 * 60_000,
+    );
+    if (candidates.length === 0) return 'native_stop_fill';
+    candidates.sort((a, b) => Math.abs(a.tsMs - closedMs) - Math.abs(b.tsMs - closedMs));
+    return candidates[0]!.trigger ?? 'unknown';
+  });
+}
+
+/**
+ * Direction-aware post-exit follow-through: % move from the exit VWAP to each
+ * subsequent daily close, signed so POSITIVE = the position kept moving the
+ * trade's way after we exited (money left on the table) and negative = the
+ * exit dodged further loss. `closesAfterExit` is oldest-first, daily closes
+ * strictly after the exit date. Pure.
+ */
+export function postExitFollowthrough(
+  trip: Pick<RoundTrip, 'direction' | 'exitAvgPrice'>,
+  closesAfterExit: number[],
+): { d1?: number; d3?: number } {
+  const sign = trip.direction === 'long' ? 1 : -1;
+  const pct = (close: number | undefined): number | undefined =>
+    close !== undefined && close > 0 && trip.exitAvgPrice > 0
+      ? round4((sign * (close - trip.exitAvgPrice)) / trip.exitAvgPrice * 100)
+      : undefined;
+  const d1 = pct(closesAfterExit[0]);
+  const d3 = pct(closesAfterExit[2]);
+  return { ...(d1 !== undefined ? { d1 } : {}), ...(d3 !== undefined ? { d3 } : {}) };
+}
+
+/** A judge-declined entry, pre-parsed from the audit log by the caller. */
+export interface JudgeVeto {
+  ticker: string;
+  ymd: string; // ET date of the decline
+  direction: 'long' | 'short';
+}
+
+/**
+ * Score a judge veto against what the trade would have done: direction-aware
+ * % return from the decline date's close (entry proxy) to +1 and +3 trading
+ * days. POSITIVE forgone = the vetoed trade would have won (the veto cost
+ * money); negative = the veto saved money. `dailyCloses` is [{ymd, c}]
+ * oldest-first for the ticker. Pure.
+ */
+export function scoreJudgeVeto(
+  veto: JudgeVeto,
+  dailyCloses: { ymd: string; c: number }[],
+): { forgone1d?: number; forgone3d?: number } {
+  const idx = dailyCloses.findIndex((b) => b.ymd >= veto.ymd);
+  if (idx < 0) return {};
+  const entry = dailyCloses[idx]!.c;
+  if (!(entry > 0)) return {};
+  const sign = veto.direction === 'long' ? 1 : -1;
+  const at = (offset: number): number | undefined => {
+    const close = dailyCloses[idx + offset]?.c;
+    return close !== undefined && close > 0
+      ? round4((sign * (close - entry)) / entry * 100)
+      : undefined;
+  };
+  const forgone1d = at(1);
+  const forgone3d = at(3);
+  return {
+    ...(forgone1d !== undefined ? { forgone1d } : {}),
+    ...(forgone3d !== undefined ? { forgone3d } : {}),
+  };
+}
+
 /**
  * Weight PROPOSAL from hit rates: 50% hit rate keeps the current weight, and
  * the adjustment is clamped to [0.5x, 1.5x] so one lucky streak cannot swing
