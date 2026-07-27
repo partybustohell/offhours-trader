@@ -482,6 +482,35 @@ describe('native stop ratchet', () => {
     expect(readAudit()).not.toContain('"kind":"stop_ratchet"');
   });
 
+  it('a canceled resting stop no longer counts as a duplicate against the exit order', async () => {
+    writeThesis(emptyThesis());
+    fs.writeFileSync(
+      path.join(dir, 'out', 'position-peaks.json'),
+      JSON.stringify({
+        NVDA: { side: 'long', entryTimeMs: NOW.getTime() - 6 * 86_400_000, peak: 214.39 },
+      }),
+    );
+    const calls: StopCalls = { stops: [], cancels: [] };
+    const placed: ProposedOrder[] = [];
+    await runTick({
+      cfg: ratchetCfg(),
+      now: NOW,
+      broker: ratchetBroker(
+        { equity: 100000, cash: 78000, positions: [nvdaLong] },
+        [restingStop('stop-old', 185.55)],
+        calls,
+        placed,
+      ),
+      // retrace from peak 214.39 to 197 = 8.1% >= 4% -> deterministic trail exit
+      marketData: fakeMd([quote('NVDA', 197.0, 197.1)]),
+      llm: {} as never,
+    });
+    expect(placed).toHaveLength(1);
+    expect(placed[0]).toMatchObject({ ticker: 'NVDA', side: 'sell', qty: 18, intent: 'exit' });
+    expect(readAudit()).not.toContain('duplicate open order');
+    expect(calls.stops).toEqual([]); // exit placed: the ratchet must stay away
+  });
+
   it('skips a position that exited this tick instead of re-arming a stop under its exit order', async () => {
     writeThesis(fslrThesis({ hardStopPct: 8, timeStopHours: 1 }));
     fs.writeFileSync(

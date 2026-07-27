@@ -43,7 +43,12 @@ export async function requestWithRetry(
       lastError = err instanceof Error ? err : new Error(String(err));
       continue;
     }
-    if (res.ok) return res.json();
+    if (res.ok) {
+      // DELETE /v2/orders/{id} answers 204 No Content — an empty 2xx body is
+      // success, not malformed JSON.
+      const text = await res.text();
+      return text === '' ? undefined : JSON.parse(text);
+    }
     const bodyText = await res.text().catch(() => '');
     if (res.status === 429 || res.status >= 500) {
       lastError = new Error(`HTTP ${res.status} from ${url}: ${bodyText}`);

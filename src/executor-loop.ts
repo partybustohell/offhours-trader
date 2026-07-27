@@ -422,6 +422,11 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
     // Cancel any resting order for this ticker first — notably an RTH stop-loss
     // leg — so the exit doesn't race a still-live protective order.
     await broker.cancelOrdersFor(ticker);
+    // Drop the canceled orders from the local view too, or riskCheck rejects
+    // the exit as a "duplicate open order" against a stop that no longer exists.
+    for (let i = openOrders.length - 1; i >= 0; i--) {
+      if (openOrders[i]!.ticker.toUpperCase() === ticker) openOrders.splice(i, 1);
+    }
     const order: ProposedOrder = {
       ticker: position.ticker,
       side: isLong ? 'sell' : 'buy',

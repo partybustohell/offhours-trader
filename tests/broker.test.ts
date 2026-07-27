@@ -479,10 +479,10 @@ describe('AlpacaBroker.placeStopOrder', () => {
 });
 
 describe('AlpacaBroker.cancelOrder', () => {
-  it('DELETEs the order by id', async () => {
-    // Alpaca answers 204; the Response test double can't carry a body-less
-    // status, and the client ignores the payload of a 2xx DELETE anyway.
-    const { fetchFn, calls } = makeFetch([{ status: 200, json: {} }]);
+  it('DELETEs the order by id and tolerates the empty 2xx body Alpaca sends', async () => {
+    // Alpaca answers DELETE with 204 No Content. json: undefined stringifies
+    // to an empty Response body, reproducing the body-less success.
+    const { fetchFn, calls } = makeFetch([{ status: 200, json: undefined }]);
     const broker = new AlpacaBroker(paperCfg, paperEnv, fetchFn, noSleep);
     await broker.cancelOrder('abc-123');
     expect(calls).toHaveLength(1);
