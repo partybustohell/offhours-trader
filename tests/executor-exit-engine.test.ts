@@ -294,3 +294,218 @@ describe('macro-event entry blackout', () => {
     expect(audit).toContain('TEST-EVENT');
   });
 });
+
+describe('native stop ratchet', () => {
+  const ratchetCfg = (): Config =>
+    ConfigSchema.parse({
+      mode: 'paper',
+      exit_engine: {
+        trail: { activate_pct: 5, trail_pct: 4 },
+        native_stop_ratchet: { enabled: true },
+      },
+    });
+
+  const nvdaLong = {
+    ticker: 'NVDA',
+    qty: 18,
+    avgEntryPrice: 201.47,
+    marketValue: 3543,
+    unrealizedPl: -83,
+    side: 'long' as const,
+  };
+
+  function emptyThesis(): Thesis {
+    return {
+      date: YMD,
+      kind: 'offhours',
+      generatedAt: '2026-07-14T21:05:00.000Z',
+      expiresAt: '2026-07-16T00:00:00.000Z',
+      entries: [],
+      skipped: [],
+    };
+  }
+
+  interface StopCalls {
+    stops: { ticker: string; side: string; qty: number; stopPrice: number }[];
+    cancels: string[];
+  }
+
+  function ratchetBroker(
+    account: AccountSnapshot,
+    openOrders: BrokerOrder[],
+    calls: StopCalls,
+    placed: ProposedOrder[] = [],
+  ): BrokerClient {
+    return {
+      getAccount: async () => account,
+      getOpenOrders: async () => openOrders,
+      getTodayOrders: async () => [],
+      getDailyPl: async () => 0,
+      cancelOrdersFor: async () => {},
+      getAsset: async () => ({ shortable: true, easyToBorrow: true }),
+      placeLimitOrder: async (o: ProposedOrder): Promise<BrokerOrder> => {
+        placed.push(o);
+        return {
+          id: `o-${placed.length}`,
+          ticker: o.ticker,
+          side: o.side,
+          qty: o.qty,
+          limitPrice: o.limitPrice,
+          status: 'accepted',
+          submittedAt: NOW.toISOString(),
+          clientOrderId: `${o.intent}-test`,
+          filledQty: 0,
+        };
+      },
+      placeStopOrder: async (o: {
+        ticker: string;
+        side: 'buy' | 'sell';
+        qty: number;
+        stopPrice: number;
+      }): Promise<BrokerOrder> => {
+        calls.stops.push(o);
+        return {
+          id: `stop-${calls.stops.length}`,
+          ticker: o.ticker,
+          side: o.side,
+          qty: o.qty,
+          limitPrice: 0,
+          stopPrice: o.stopPrice,
+          status: 'accepted',
+          submittedAt: NOW.toISOString(),
+          clientOrderId: 'tstop-test',
+          filledQty: 0,
+        };
+      },
+      cancelOrder: async (id: string) => {
+        calls.cancels.push(id);
+      },
+    } as unknown as BrokerClient;
+  }
+
+  function restingStop(id: string, stopPrice: number, qty = 18): BrokerOrder {
+    return {
+      id,
+      ticker: 'NVDA',
+      side: 'sell',
+      qty,
+      type: 'stop',
+      limitPrice: 0,
+      stopPrice,
+      timeInForce: 'gtc',
+      status: 'new',
+      submittedAt: '2026-07-09T15:07:00Z',
+      clientOrderId: 'manual-1',
+      filledQty: 0,
+    };
+  }
+
+  it('places a missing protective stop at the hard-stop level (unarmed)', async () => {
+    writeThesis(emptyThesis());
+    const calls: StopCalls = { stops: [], cancels: [] };
+    await runTick({
+      cfg: ratchetCfg(),
+      now: NOW,
+      broker: ratchetBroker({ equity: 100000, cash: 78000, positions: [nvdaLong] }, [], calls),
+      marketData: fakeMd([quote('NVDA', 196.0, 196.1)]),
+      llm: {} as never,
+    });
+    expect(calls.cancels).toEqual([]);
+    expect(calls.stops).toEqual([
+      { ticker: 'NVDA', side: 'sell', qty: 18, stopPrice: 185.35 },
+    ]);
+    expect(readAudit()).toContain('"kind":"stop_ratchet"');
+  });
+
+  it('armed by the persisted peak: cancels the stale stop and ratchets up', async () => {
+    writeThesis(emptyThesis());
+    fs.writeFileSync(
+      path.join(dir, 'out', 'position-peaks.json'),
+      JSON.stringify({
+        NVDA: { side: 'long', entryTimeMs: NOW.getTime() - 6 * 86_400_000, peak: 214.39 },
+      }),
+    );
+    const calls: StopCalls = { stops: [], cancels: [] };
+    await runTick({
+      cfg: ratchetCfg(),
+      now: NOW,
+      broker: ratchetBroker(
+        { equity: 100000, cash: 78000, positions: [nvdaLong] },
+        [restingStop('stop-old', 185.55)],
+        calls,
+      ),
+      marketData: fakeMd([quote('NVDA', 207.0, 207.1)]),
+      llm: {} as never,
+    });
+    // max(hard 185.35, breakeven 201.47, peak 214.39 * 0.96 = 205.8144) -> 205.81
+    expect(calls.cancels).toEqual(['stop-old']);
+    expect(calls.stops).toEqual([
+      { ticker: 'NVDA', side: 'sell', qty: 18, stopPrice: 205.81 },
+    ]);
+  });
+
+  it('never loosens: an already-tighter resting stop is left alone', async () => {
+    writeThesis(emptyThesis());
+    fs.writeFileSync(
+      path.join(dir, 'out', 'position-peaks.json'),
+      JSON.stringify({
+        NVDA: { side: 'long', entryTimeMs: NOW.getTime() - 6 * 86_400_000, peak: 214.39 },
+      }),
+    );
+    const calls: StopCalls = { stops: [], cancels: [] };
+    await runTick({
+      cfg: ratchetCfg(),
+      now: NOW,
+      broker: ratchetBroker(
+        { equity: 100000, cash: 78000, positions: [nvdaLong] },
+        [restingStop('stop-tight', 206.5)],
+        calls,
+      ),
+      marketData: fakeMd([quote('NVDA', 207.0, 207.1)]),
+      llm: {} as never,
+    });
+    expect(calls.cancels).toEqual([]);
+    expect(calls.stops).toEqual([]);
+  });
+
+  it('stays dark when native_stop_ratchet is disabled (default)', async () => {
+    writeThesis(emptyThesis());
+    const calls: StopCalls = { stops: [], cancels: [] };
+    await runTick({
+      cfg: baseCfg(),
+      now: NOW,
+      broker: ratchetBroker({ equity: 100000, cash: 78000, positions: [nvdaLong] }, [], calls),
+      marketData: fakeMd([quote('NVDA', 196.0, 196.1)]),
+      llm: {} as never,
+    });
+    expect(calls.stops).toEqual([]);
+    expect(readAudit()).not.toContain('"kind":"stop_ratchet"');
+  });
+
+  it('skips a position that exited this tick instead of re-arming a stop under its exit order', async () => {
+    writeThesis(fslrThesis({ hardStopPct: 8, timeStopHours: 1 }));
+    fs.writeFileSync(
+      path.join(dir, 'out', 'position-peaks.json'),
+      JSON.stringify({
+        FSLR: { side: 'short', entryTimeMs: NOW.getTime() - 2 * 3_600_000, peak: 220 },
+      }),
+    );
+    const calls: StopCalls = { stops: [], cancels: [] };
+    const placed: ProposedOrder[] = [];
+    await runTick({
+      cfg: ratchetCfg(),
+      now: NOW,
+      broker: ratchetBroker(
+        { equity: 100000, cash: 100000, positions: [shortPosition] },
+        [],
+        calls,
+        placed,
+      ),
+      marketData: fakeMd([quote('FSLR', 219.0, 219.1)]),
+      llm: {} as never,
+    });
+    expect(placed).toHaveLength(1);
+    expect(placed[0]!.intent).toBe('exit');
+    expect(calls.stops).toEqual([]);
+  });
+});

@@ -313,6 +313,18 @@ export class SimLedger implements BrokerClient {
     return this.orders.filter((o) => o.status === 'new').map((o) => this.toBrokerOrder(o));
   }
 
+  async placeStopOrder(): Promise<never> {
+    // The sim fill engine has no stop-trigger semantics; a quietly recorded
+    // stop would either never fill or fill like a limit at price 0. Backtests
+    // must keep exit_engine.native_stop_ratchet disabled — fail loud if not.
+    throw new Error('SimLedger.placeStopOrder: native stop ratchet is not supported in backtests');
+  }
+
+  async cancelOrder(id: string): Promise<void> {
+    const order = this.orders.find((o) => o.id === id);
+    if (order && order.status === 'new') order.status = 'canceled';
+  }
+
   async cancelOrdersFor(ticker: string): Promise<void> {
     const t = ticker.toUpperCase();
     for (const o of this.orders) {

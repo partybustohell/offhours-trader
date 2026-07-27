@@ -422,3 +422,78 @@ describe('AlpacaMarketData', () => {
     ]);
   });
 });
+
+describe('AlpacaBroker.placeStopOrder', () => {
+  const stopOrderJson = {
+    id: 'stop-1',
+    symbol: 'NVDA',
+    side: 'sell',
+    qty: '18',
+    type: 'stop',
+    stop_price: '115.20',
+    status: 'accepted',
+    submitted_at: '2026-07-27T14:00:00Z',
+  };
+
+  it('sends a simple GTC stop with a tstop- client id and no limit price', async () => {
+    const { fetchFn, calls } = makeFetch([{ status: 200, json: stopOrderJson }]);
+    const broker = new AlpacaBroker(paperCfg, paperEnv, fetchFn, noSleep);
+    const placed = await broker.placeStopOrder({
+      ticker: 'NVDA',
+      side: 'sell',
+      qty: 18,
+      stopPrice: 115.2,
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe('https://paper-api.alpaca.markets/v2/orders');
+    expect(calls[0]!.init?.method).toBe('POST');
+    const body = JSON.parse(String(calls[0]!.init?.body));
+    expect(body.client_order_id).toMatch(/^tstop-/);
+    expect(body).toEqual({
+      symbol: 'NVDA',
+      qty: '18',
+      side: 'sell',
+      type: 'stop',
+      time_in_force: 'gtc',
+      stop_price: '115.20',
+      client_order_id: body.client_order_id,
+    });
+    expect(placed.stopPrice).toBe(115.2);
+    expect(placed.id).toBe('stop-1');
+  });
+
+  it('dry-run synthesizes the order without any HTTP call', async () => {
+    const { fetchFn, calls } = makeFetch([{ status: 500, json: {} }]);
+    const broker = new AlpacaBroker(dryCfg, paperEnv, fetchFn, noSleep);
+    const placed = await broker.placeStopOrder({
+      ticker: 'NVDA',
+      side: 'sell',
+      qty: 18,
+      stopPrice: 115.2,
+    });
+    expect(calls).toHaveLength(0);
+    expect(placed.status).toBe('dry_run');
+    expect(placed.stopPrice).toBe(115.2);
+  });
+});
+
+describe('AlpacaBroker.cancelOrder', () => {
+  it('DELETEs the order by id', async () => {
+    // Alpaca answers 204; the Response test double can't carry a body-less
+    // status, and the client ignores the payload of a 2xx DELETE anyway.
+    const { fetchFn, calls } = makeFetch([{ status: 200, json: {} }]);
+    const broker = new AlpacaBroker(paperCfg, paperEnv, fetchFn, noSleep);
+    await broker.cancelOrder('abc-123');
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe('https://paper-api.alpaca.markets/v2/orders/abc-123');
+    expect(calls[0]!.init?.method).toBe('DELETE');
+  });
+
+  it('dry-run is a no-op', async () => {
+    const { fetchFn, calls } = makeFetch([{ status: 500, json: {} }]);
+    const broker = new AlpacaBroker(dryCfg, paperEnv, fetchFn, noSleep);
+    await broker.cancelOrder('abc-123');
+    expect(calls).toHaveLength(0);
+  });
+});

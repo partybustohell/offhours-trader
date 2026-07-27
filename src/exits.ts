@@ -91,6 +91,15 @@ export function evaluateExit(ctx: ExitContext): ExitDecision {
           reason: `trail: retrace ${retracePct.toFixed(1)}% from peak ${ctx.peakFavorablePrice} >= ${plan.trail.trailPct}%`,
         };
       }
+      // Armed winners never round-trip into losers: a full retrace to entry
+      // exits even when the peak-relative retrace is still inside trailPct.
+      if (plan.trail.floorAtEntry && (isLong ? markPrice <= entryPrice : markPrice >= entryPrice)) {
+        return {
+          exit: true,
+          trigger: 'trail',
+          reason: `trail: breakeven floor — armed at +${plan.trail.activatePct}% (peak ${ctx.peakFavorablePrice}), mark ${markPrice} back through entry ${entryPrice}`,
+        };
+      }
     }
   }
 
@@ -125,15 +134,27 @@ export function resolveExitPlan(
   // stop at the legacy cap regardless of source (config or entry-carried).
   const cap = cfg.max_position_loss_pct;
   const baseStop = cfg.exit_engine.hard_stop_pct ?? cap;
-  if (!entry) return { hardStopPct: Math.min(baseStop, cap) };
+  // Config-level default trail (policy: e.g. arm at +5%, floor at breakeven,
+  // trail 4% off the favorable peak). An entry-carried trail always wins.
+  const t = cfg.exit_engine.trail;
+  const defaultTrail = t
+    ? { activatePct: t.activate_pct, trailPct: t.trail_pct, floorAtEntry: t.breakeven_floor }
+    : undefined;
+  if (!entry) {
+    return {
+      hardStopPct: Math.min(baseStop, cap),
+      ...(defaultTrail ? { trail: defaultTrail } : {}),
+    };
+  }
   const hardDefault =
     entry.direction === 'short' ? (cfg.exit_engine.short_hard_stop_pct ?? baseStop) : baseStop;
   const e = entry.exit;
+  const trail = e?.trail ?? defaultTrail;
   return {
     hardStopPct: Math.min(e?.hardStopPct ?? hardDefault, cap),
     ...(e?.invalidationPrice !== undefined ? { invalidationPrice: e.invalidationPrice } : {}),
     ...(e?.target !== undefined ? { target: e.target } : {}),
-    ...(e?.trail ? { trail: e.trail } : {}),
+    ...(trail ? { trail } : {}),
     timeStopHours: e?.timeStopHours ?? cfg.exit_engine.horizon_hours[entry.horizon ?? 'days'],
   };
 }

@@ -351,3 +351,117 @@ describe('mergedExitPlan', () => {
     });
   });
 });
+
+describe('resolveExitPlan: config-default trail', () => {
+  const trailCfg = ConfigSchema.parse({
+    exit_engine: { trail: { activate_pct: 5, trail_pct: 4, breakeven_floor: true } },
+  });
+
+  it('orphan gets the config trail (stop + trail, still no time stop)', () => {
+    expect(resolveExitPlan(undefined, trailCfg)).toEqual({
+      hardStopPct: 8,
+      trail: { activatePct: 5, trailPct: 4, floorAtEntry: true },
+    });
+  });
+
+  it('bare entry gets the config trail plus the horizon time stop', () => {
+    expect(resolveExitPlan({ direction: 'long' }, trailCfg)).toEqual({
+      hardStopPct: 8,
+      trail: { activatePct: 5, trailPct: 4, floorAtEntry: true },
+      timeStopHours: 30,
+    });
+  });
+
+  it('entry-carried trail beats the config default', () => {
+    const plan = resolveExitPlan(
+      { direction: 'long', exit: { hardStopPct: 8, trail: { activatePct: 6, trailPct: 2 } } },
+      trailCfg,
+    );
+    expect(plan.trail).toEqual({ activatePct: 6, trailPct: 2 });
+  });
+
+  it('breakeven_floor defaults to true and false maps through', () => {
+    const c = ConfigSchema.parse({
+      exit_engine: { trail: { activate_pct: 5, trail_pct: 4, breakeven_floor: false } },
+    });
+    expect(resolveExitPlan(undefined, c).trail).toEqual({
+      activatePct: 5,
+      trailPct: 4,
+      floorAtEntry: false,
+    });
+    const d = ConfigSchema.parse({ exit_engine: { trail: { activate_pct: 5, trail_pct: 4 } } });
+    expect(resolveExitPlan(undefined, d).trail).toEqual({
+      activatePct: 5,
+      trailPct: 4,
+      floorAtEntry: true,
+    });
+  });
+
+  it('absent config trail leaves plans trail-free (legacy no-regression)', () => {
+    expect(resolveExitPlan(undefined, cfg).trail).toBeUndefined();
+  });
+});
+
+describe('evaluateExit: trail breakeven floor', () => {
+  // trailPct wider than the activation gain: the plain peak-retrace test alone
+  // would let an armed winner round-trip back through entry (retrace 5.3% < 8%).
+  const floorPlan = {
+    hardStopPct: 50,
+    trail: { activatePct: 5, trailPct: 8, floorAtEntry: true },
+  };
+
+  it('long: armed, mark back at entry exits on the floor before the retrace test', () => {
+    const d = evaluateExit({
+      ...base,
+      plan: floorPlan,
+      peakFavorablePrice: 105.5, // +5.5% >= 5: armed
+      markPrice: 100, // retrace 5.21% < trailPct 8 — only the floor catches this
+    });
+    expect(d.exit).toBe(true);
+    expect(d.trigger).toBe('trail');
+    expect(d.reason).toContain('breakeven');
+  });
+
+  it('long: without floorAtEntry the same retrace holds (legacy semantics)', () => {
+    const d = evaluateExit({
+      ...base,
+      plan: { hardStopPct: 50, trail: { activatePct: 5, trailPct: 8 } },
+      peakFavorablePrice: 105.5,
+      markPrice: 100,
+    });
+    expect(d.exit).toBe(false);
+  });
+
+  it('long: floor stays dark until armed', () => {
+    const d = evaluateExit({
+      ...base,
+      plan: floorPlan,
+      peakFavorablePrice: 104.9, // +4.9% < 5: not armed
+      markPrice: 99.9,
+    });
+    expect(d.exit).toBe(false);
+  });
+
+  it('long: armed and above entry with shallow retrace still holds', () => {
+    const d = evaluateExit({
+      ...base,
+      plan: floorPlan,
+      peakFavorablePrice: 106,
+      markPrice: 102, // retrace 3.77% < 8, mark > entry
+    });
+    expect(d.exit).toBe(false);
+  });
+
+  it('short: armed, mark back at entry exits on the floor', () => {
+    const d = evaluateExit({
+      ...base,
+      direction: 'short',
+      plan: floorPlan,
+      peakFavorablePrice: 94.5, // favorable low: +5.5% gain, armed
+      markPrice: 100.05, // retrace 5.87% < 8 — only the floor catches this
+    });
+    expect(d.exit).toBe(true);
+    expect(d.trigger).toBe('trail');
+    expect(d.reason).toContain('breakeven');
+  });
+});

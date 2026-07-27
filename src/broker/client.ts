@@ -7,6 +7,7 @@ import type {
   Mode,
   Position,
   ProposedOrder,
+  ProposedStopOrder,
 } from '../types.js';
 
 export type FetchFn = typeof globalThis.fetch;
@@ -178,6 +179,12 @@ export interface BrokerClient {
   getOpenOrders(): Promise<BrokerOrder[]>;
   getTodayOrders(): Promise<BrokerOrder[]>;
   placeLimitOrder(o: ProposedOrder): Promise<BrokerOrder>;
+  /** Simple resting protective stop (GTC): the trailing-stop ratchet's order.
+   *  GTC so the protection survives an engine outage. */
+  placeStopOrder(o: ProposedStopOrder): Promise<BrokerOrder>;
+  /** Cancel one order by broker id (ratchet cancel/replace). Throws on
+   *  failure so the caller can skip the replacement leg. */
+  cancelOrder(id: string): Promise<void>;
   /** Cancel all open orders for a ticker (e.g. a resting RTH stop-loss leg
    *  before a manual exit). No-op when there are none. */
   cancelOrdersFor(ticker: string): Promise<void>;
@@ -319,6 +326,59 @@ export class AlpacaBroker implements BrokerClient {
       }
       throw err;
     }
+  }
+
+  async placeStopOrder(o: ProposedStopOrder): Promise<BrokerOrder> {
+    // Same duplicate-safety rationale as placeLimitOrder: one id per call.
+    const clientOrderId = `tstop-${randomUUID()}`;
+    if (this.mode === 'dry-run') {
+      const ts = new Date().toISOString();
+      return {
+        id: `dry-${ts}`,
+        ticker: o.ticker,
+        side: o.side,
+        qty: o.qty,
+        limitPrice: 0,
+        stopPrice: o.stopPrice,
+        status: 'dry_run',
+        submittedAt: ts,
+        clientOrderId,
+        filledQty: 0,
+      };
+    }
+    const body: Record<string, unknown> = {
+      symbol: o.ticker,
+      qty: String(o.qty),
+      side: o.side,
+      type: 'stop',
+      // GTC: the whole point is a stop that rests at the broker while the
+      // engine is down. Stops only execute in RTH regardless of TIF.
+      time_in_force: 'gtc',
+      stop_price: o.stopPrice.toFixed(2),
+      client_order_id: clientOrderId,
+    };
+    try {
+      const raw = await this.request('/v2/orders', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      return mapOrder(raw as AlpacaOrder);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (/client.?order.?id/i.test(message)) {
+        const raw = await this.request(
+          `/v2/orders:by_client_order_id?client_order_id=${encodeURIComponent(clientOrderId)}`,
+        );
+        return mapOrder(raw as AlpacaOrder);
+      }
+      throw err;
+    }
+  }
+
+  async cancelOrder(id: string): Promise<void> {
+    if (this.mode === 'dry-run') return;
+    await this.request(`/v2/orders/${id}`, { method: 'DELETE' });
   }
 
   async cancelOrdersFor(ticker: string): Promise<void> {

@@ -10,6 +10,7 @@ import { activeEventBlackout, entryTimingAllowed, sessionGate } from './session-
 import { costScalar, drawdownThrottle, participationQty, riskOffTriggered } from './signals.js';
 import { appendAudit } from './audit.js';
 import { evaluateExit, resolveExitPlan } from './exits.js';
+import { planStopAction } from './trailing-stop.js';
 import { ensureOut, OUT_DIR, readJsonIfExists, thesisPath } from './paths.js';
 import { prunePositionPeaks, readHaltState, trackPositionPeak, updatePeakEquity, writeHalt } from './state.js';
 import { riskCheck, type RiskContext } from './risk.js';
@@ -317,6 +318,10 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
     return undefined;
   };
 
+  // Tickers whose exit order was placed this tick: the ratchet below must not
+  // re-arm a protective stop underneath a live exit (double-fill risk).
+  const exitOrderedTickers = new Set<string>();
+
   // Exits first: closing risk takes precedence over opening it.
   for (const position of account.positions) {
     const ticker = position.ticker.toUpperCase();
@@ -436,6 +441,7 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
       openOrders.push(placed);
       appendAudit({ kind: 'order_placed', data: placed });
       summary.exitsPlaced++;
+      exitOrderedTickers.add(ticker);
     } else {
       appendAudit({ kind: 'order_rejected', data: { order, reasons: risk.reasons } });
       summary.rejected++;
@@ -446,6 +452,77 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
   // on the engine flag so the flag-off path writes no new artifact.
   if (cfg.exit_engine.enabled) {
     prunePositionPeaks(account.positions.map((p) => p.ticker.toUpperCase()));
+  }
+
+  // Native protective-stop ratchet: converge each position's resting GTC stop
+  // toward the trail floor (hard stop until armed, then breakeven / peak
+  // trail). Runs AFTER exits — a risk-rejected exit falls through to here and
+  // gets re-protected; a placed exit is skipped above via exitOrderedTickers.
+  if (cfg.exit_engine.enabled && cfg.exit_engine.native_stop_ratchet.enabled) {
+    for (const position of account.positions) {
+      const ticker = position.ticker.toUpperCase();
+      if (exitOrderedTickers.has(ticker)) continue;
+      const quote = quoteByTicker.get(ticker);
+      if (!quote) continue; // no fresh mark; the GTC stop already resting still protects
+      const isLong = position.side === 'long';
+      const mark = isLong ? quote.bid : quote.ask;
+      const entry = exitEntryFor(ticker);
+      const plan = entry ? resolveExitPlan(entry, cfg) : resolveExitPlan(undefined, cfg);
+      // Idempotent within the tick: the exit loop already ratcheted the peak.
+      const peak = trackPositionPeak(ticker, position.side, mark, now.getTime());
+      const exitSide = isLong ? 'sell' : 'buy';
+      const resting = openOrders.find(
+        (o) =>
+          o.ticker.toUpperCase() === ticker &&
+          o.type === 'stop' &&
+          o.side === exitSide &&
+          o.stopPrice !== undefined &&
+          (o.status === 'new' || o.status === 'accepted' || o.status === 'held'),
+      );
+      const action = planStopAction({
+        side: position.side,
+        qty: Math.abs(position.qty),
+        entryPrice: position.avgEntryPrice,
+        peak: peak.peak,
+        plan,
+        ...(resting
+          ? { existing: { id: resting.id, stopPrice: resting.stopPrice!, qty: resting.qty } }
+          : {}),
+      });
+      if (action.action === 'none') continue;
+      try {
+        if (action.action === 'replace') await broker.cancelOrder(action.cancelId);
+        const placedStop = await broker.placeStopOrder({
+          ticker: position.ticker,
+          side: exitSide,
+          qty: action.qty,
+          stopPrice: action.stopPrice,
+        });
+        appendAudit({
+          kind: 'stop_ratchet',
+          data: {
+            ticker,
+            action: action.action,
+            from: resting?.stopPrice,
+            to: action.stopPrice,
+            qty: action.qty,
+            peak: peak.peak,
+            orderId: placedStop.id,
+          },
+        });
+      } catch (err) {
+        // Cancel/replace race (stop filled between fetch and cancel) or a
+        // rejected placement: audit and reconverge next tick.
+        appendAudit({
+          kind: 'error',
+          data: {
+            stage: 'stop_ratchet',
+            ticker,
+            message: err instanceof Error ? err.message : String(err),
+          },
+        });
+      }
+    }
   }
 
   // Entries-only timing blackout (feed-independent wall-clock gate). Exits

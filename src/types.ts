@@ -76,6 +76,8 @@ export interface ExitPlan {
     activatePct: number;
     /** Then exit if mark retraces this % from the favorable peak. */
     trailPct: number;
+    /** Once armed, also exit if the mark retraces all the way to entry. */
+    floorAtEntry?: boolean;
   };
   /** Exit if unresolved this many hours after entry (first-seen fallback). */
   timeStopHours?: number;
@@ -138,6 +140,14 @@ export interface ProposedOrder {
   // OTO). Only set on RTH entries — extended-hours stops do not execute.
   stopLoss?: number;
 }
+/** Simple resting protective stop placed by the trailing-stop ratchet. */
+export interface ProposedStopOrder {
+  ticker: string;
+  side: 'buy' | 'sell';
+  qty: number;
+  stopPrice: number;
+}
+
 export interface RiskDecision {
   allowed: boolean;
   reasons: string[];
@@ -192,6 +202,7 @@ export interface AuditEvent {
     | 'order_placed'
     | 'order_rejected'
     | 'exit'
+    | 'stop_ratchet'
     | 'counterfactual'
     | 'halt'
     | 'resume'

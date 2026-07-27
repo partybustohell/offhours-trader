@@ -326,6 +326,8 @@ describe('exit_engine config', () => {
     expect(cfg.exit_engine).toEqual({
       enabled: true,
       horizon_hours: { days: 30, weeks: 120 },
+      // No default trail (legacy no-regression); ratchet opt-in per config.
+      native_stop_ratchet: { enabled: false },
     });
   });
 

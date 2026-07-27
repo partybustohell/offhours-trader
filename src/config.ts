@@ -313,6 +313,23 @@ export const ConfigSchema = z.object({
       hard_stop_pct: z.number().positive().optional(),
       // Optional tighter stop for shorts; falls back to hard_stop_pct.
       short_hard_stop_pct: z.number().positive().optional(),
+      // Default trailing policy applied to every position (orphans included)
+      // when the entry carries no trail of its own. Absent -> legacy behavior
+      // (no trail unless the thesis emits one).
+      trail: z
+        .object({
+          activate_pct: z.number().positive(),
+          trail_pct: z.number().positive(),
+          // Once armed, also exit on a full retrace to entry — guards configs
+          // where trail_pct exceeds activate_pct.
+          breakeven_floor: z.boolean().default(true),
+        })
+        .optional(),
+      // Maintain a resting GTC broker stop per position at the trail floor
+      // (src/trailing-stop.ts): protection that survives an engine outage.
+      // Off by default — backtests must never enable it (SimLedger has no
+      // stop-trigger semantics and fails loud).
+      native_stop_ratchet: z.object({ enabled: z.boolean().default(false) }).default({}),
       // Fallback timeStopHours by verdict horizon (conservative; revisit on soak).
       horizon_hours: z
         .object({
