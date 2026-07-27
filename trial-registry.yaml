@@ -402,6 +402,49 @@ trials:
       path (pre-committed simplification; cost + determinism win).
       (6) analysts_by_name stays EMPTY until a per-persona model A/B is
       registered as its own row and run as a paired backtest.
+  # ---- 2026-07-27 (Tier 3): machinery shipped DARK with pre-stated activation
+  # tests, registered BEFORE any outcome data exists in the soak window.
+  - id: scale-out-exits-2026-07-27
+    date: "2026-07-27"
+    flag: exit_engine.scale_out
+    type: guardrail
+    status: shipped-flag-off
+    notes: >-
+      Partial take-profit machinery: with the flag on, the target trigger
+      exits target_fraction (0.5) of the position ONCE (persisted marker
+      targetScaledOut in position-peaks.json) and the trail / time-stop /
+      hard-stop manage the remainder; the stop ratchet re-covers the remainder
+      via its qty-drift replace on the next tick. All-or-nothing remains the
+      shipped behavior. ENABLE CONDITION (pre-stated): the feedback report's
+      exitTriggers.target bucket must show avgPostExit3dPct >= +1.5 over >= 15
+      target exits (systematic money left on the table by full target exits),
+      THEN a paired backtest cell registered against this flag, THEN the
+      config flip. Exit-shape change: measured like exit-engine-v1 (risk
+      shape, not edge).
+  - id: soak-gate-concretization-2026-07-27
+    date: "2026-07-27"
+    flag: soak-gate
+    type: guardrail
+    status: in-force
+    notes: >-
+      Exact tests implemented by scripts/soak-gate.ts (pnpm gate), fixed while
+      the soak window has ZERO closed trades so no threshold can be fitted to
+      outcomes. Trades enter the window by OPEN date >= 2026-07-27; trades
+      with no shadow record are EXCLUDED from both buckets (missing coverage
+      must not masquerade as evidence). Rule 2 ENABLE test: >= 50 matched OOS
+      closed trades, both buckets >= 10, and the flagged bucket's mean trade
+      return strictly below the unflagged bucket's (for regime.trend, flagged
+      = the shadow book-level regime read hostile or risk_off on the thesis
+      date; for anti_chase, flagged = the entry's shadow record wouldFire).
+      Rule 3 KILL test: same sample floors, flagged mean strictly above
+      unflagged. Rule 4: calibration/weights eligible when window trades >=
+      calibration.min_trades AND >= 90 days since the last registry row with
+      flag calibration / status applied. Rule 5: judge REMOVE when >= 30
+      scored vetoes and |avgForgone1dPct| <= 0.5; strongly negative -> KEEP;
+      strongly positive exceeds the pre-commitment -> REVIEW (new decision
+      required). Small-sample decision rules, not significance claims; the
+      gate only prints patches — applying remains a manual config + registry
+      edit that preflight then enforces.
   - id: exit-engine-v1
     date: "2026-07-15"
     window: "2026-01-01..2026-07-01"

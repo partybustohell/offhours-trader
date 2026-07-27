@@ -383,6 +383,20 @@ export const ConfigSchema = z.object({
           min_exit_top_size: z.number().min(0).default(0),
         })
         .default({}),
+      // Scale-out at target (Tier-3 machinery, ships FLAG-OFF): when enabled,
+      // the target trigger exits only target_fraction of the position ONCE
+      // (persisted marker), and the trail/time-stop/hard-stop manage the
+      // remainder. All-or-nothing stays the default. ENABLE CONDITION is
+      // pre-registered (trial-registry scale-out-exits-2026-07-27): the
+      // feedback report's target-trigger bucket must show >= +1.5% average
+      // 3-day post-exit follow-through over >= 15 target exits (systematic
+      // money left on the table), THEN a paired backtest cell, THEN this flag.
+      scale_out: z
+        .object({
+          enabled: z.boolean().default(false),
+          target_fraction: z.number().min(0.1).max(0.9).default(0.5),
+        })
+        .default({}),
       // Fallback timeStopHours by verdict horizon (conservative; revisit on soak).
       horizon_hours: z
         .object({

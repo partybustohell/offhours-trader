@@ -65,6 +65,10 @@ export interface PositionPeak {
   /** Consecutive ticks a trail-family exit trigger has fired (debounce state,
    *  see exit_engine.trail_debounce). Absent/0 = no pending trigger. */
   trailPendingCount?: number;
+  /** True once the scale-out partial target exit has been PLACED for this
+   *  position (exit_engine.scale_out) — the target trigger then stays silent
+   *  for the remainder. Cleared with the record when the position closes. */
+  targetScaledOut?: boolean;
 }
 type PeaksState = Record<string, PositionPeak>;
 
@@ -106,13 +110,23 @@ export function trackPositionPeak(
           side,
           entryTimeMs: prev.entryTimeMs,
           peak: side === 'long' ? Math.max(prev.peak, mark) : Math.min(prev.peak, mark),
-          // carry the debounce counter; a side flip below starts fresh
+          // carry the debounce counter + scale-out marker; a side flip starts fresh
           ...(prev.trailPendingCount ? { trailPendingCount: prev.trailPendingCount } : {}),
+          ...(prev.targetScaledOut ? { targetScaledOut: true } : {}),
         }
       : { side, entryTimeMs: nowMs, peak: mark };
   peaks[key] = rec;
   writeJsonAtomic(peaksPath(), peaks);
   return rec;
+}
+
+/** Persist the scale-out marker after the partial target exit is placed. */
+export function setTargetScaledOut(ticker: string): void {
+  const peaks = readPeaks();
+  const rec = peaks[ticker.toUpperCase()];
+  if (!rec || rec.targetScaledOut) return;
+  rec.targetScaledOut = true;
+  writeJsonAtomic(peaksPath(), peaks);
 }
 
 /**

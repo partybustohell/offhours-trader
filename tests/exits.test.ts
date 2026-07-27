@@ -216,6 +216,70 @@ describe('evaluateExit: time stop', () => {
 
 const cfg = ConfigSchema.parse({});
 
+describe('evaluateExit: scale-out at target', () => {
+  const plan = { hardStopPct: 8, target: 110, scaleOut: { targetFraction: 0.5 } };
+
+  it('first target hit exits the configured fraction', () => {
+    const d = evaluateExit({ ...base, markPrice: 110, peakFavorablePrice: 110, plan });
+    expect(d.exit).toBe(true);
+    expect(d.trigger).toBe('target');
+    expect(d.fraction).toBe(0.5);
+    expect(d.reason).toContain('scale-out 50%');
+  });
+
+  it('after the scale-out, the target stays silent and lower triggers still run', () => {
+    // Target still exceeded but already scaled: no target exit...
+    const silent = evaluateExit({
+      ...base,
+      markPrice: 110,
+      peakFavorablePrice: 112,
+      plan,
+      targetAlreadyScaled: true,
+    });
+    expect(silent.exit).toBe(false);
+    // ...while the trail on the remainder still fires normally.
+    const trailing = evaluateExit({
+      ...base,
+      markPrice: 106,
+      peakFavorablePrice: 112,
+      plan: { ...plan, trail: { activatePct: 5, trailPct: 4 } },
+      targetAlreadyScaled: true,
+    });
+    expect(trailing.exit).toBe(true);
+    expect(trailing.trigger).toBe('trail');
+  });
+
+  it('without scaleOut the target remains a full exit with no fraction', () => {
+    const d = evaluateExit({
+      ...base,
+      markPrice: 110,
+      peakFavorablePrice: 110,
+      plan: { hardStopPct: 8, target: 110 },
+    });
+    expect(d.exit).toBe(true);
+    expect(d.fraction).toBeUndefined();
+  });
+
+  it('hard stop outranks the scale-out target and stays a full exit', () => {
+    const d = evaluateExit({ ...base, markPrice: 92, plan });
+    expect(d.trigger).toBe('hard_stop');
+    expect(d.fraction).toBeUndefined();
+  });
+});
+
+describe('resolveExitPlan: scale-out flag', () => {
+  it('attaches scaleOut only when the config flag is on', () => {
+    const off = ConfigSchema.parse({});
+    expect(resolveExitPlan({ direction: 'long' }, off).scaleOut).toBeUndefined();
+    expect(resolveExitPlan(undefined, off).scaleOut).toBeUndefined();
+    const on = ConfigSchema.parse({
+      exit_engine: { scale_out: { enabled: true, target_fraction: 0.4 } },
+    });
+    expect(resolveExitPlan({ direction: 'long' }, on).scaleOut).toEqual({ targetFraction: 0.4 });
+    expect(resolveExitPlan(undefined, on).scaleOut).toEqual({ targetFraction: 0.4 });
+  });
+});
+
 describe('resolveExitPlan', () => {
   it('orphan (no entry): stop-only at the config hard stop, no time stop', () => {
     expect(resolveExitPlan(undefined, cfg)).toEqual({ hardStopPct: 8 });

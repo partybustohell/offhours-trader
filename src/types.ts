@@ -84,6 +84,10 @@ export interface ExitPlan {
   };
   /** Exit if unresolved this many hours after entry (first-seen fallback). */
   timeStopHours?: number;
+  /** Scale-out at target (exit_engine.scale_out, flag-off): the target
+   *  trigger exits only this fraction, once; trail/time/hard-stop manage the
+   *  remainder. Present only when the config flag is enabled. */
+  scaleOut?: { targetFraction: number };
 }
 
 export interface ThesisEntry {

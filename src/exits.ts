@@ -17,12 +17,19 @@ export interface ExitContext {
   peakFavorablePrice: number; // high-water (long) / low-water (short) since entry
   nowMs: number;
   plan: ExitPlan; // resolved (post-fallback) plan
+  /** Scale-out bookkeeping: true once the partial target exit has been taken
+   *  for this position (persisted in the peaks state). The target trigger
+   *  then stays silent and the remainder rides trail/time/hard-stop. */
+  targetAlreadyScaled?: boolean;
 }
 
 export interface ExitDecision {
   exit: boolean;
   reason?: string;
   trigger?: ExitTrigger;
+  /** Fraction of the position to exit; absent = 1 (full exit, the default).
+   *  Only ever < 1 on a scale-out target trigger. */
+  fraction?: number;
 }
 
 // Float tolerance for computed-percentage comparisons (division introduces
@@ -60,15 +67,29 @@ export function evaluateExit(ctx: ExitContext): ExitDecision {
     }
   }
 
-  // 3. target — pre-committed take-profit.
+  // 3. target — pre-committed take-profit. With scale-out enabled the trigger
+  // fires ONCE for a fraction of the position (the caller persists the marker)
+  // and then goes silent so the remainder rides the trail/time/hard stops.
   if (plan.target !== undefined) {
     const hit = isLong ? markPrice >= plan.target : markPrice <= plan.target;
     if (hit) {
-      return {
-        exit: true,
-        trigger: 'target',
-        reason: `target: mark ${markPrice} ${isLong ? '>=' : '<='} ${plan.target}`,
-      };
+      if (plan.scaleOut) {
+        if (!ctx.targetAlreadyScaled) {
+          return {
+            exit: true,
+            trigger: 'target',
+            fraction: plan.scaleOut.targetFraction,
+            reason: `target: mark ${markPrice} ${isLong ? '>=' : '<='} ${plan.target} — scale-out ${Math.round(plan.scaleOut.targetFraction * 100)}%`,
+          };
+        }
+        // already scaled: target stays silent; fall through to trail/time.
+      } else {
+        return {
+          exit: true,
+          trigger: 'target',
+          reason: `target: mark ${markPrice} ${isLong ? '>=' : '<='} ${plan.target}`,
+        };
+      }
     }
   }
 
@@ -152,10 +173,16 @@ export function resolveExitPlan(
         ...(t.breakeven_at_pct !== undefined ? { breakevenAtPct: t.breakeven_at_pct } : {}),
       }
     : undefined;
+  // Scale-out policy attaches only when the flag is on, so the flag-off plan
+  // is byte-identical to before the machinery existed.
+  const scaleOut = cfg.exit_engine.scale_out.enabled
+    ? { targetFraction: cfg.exit_engine.scale_out.target_fraction }
+    : undefined;
   if (!entry) {
     return {
       hardStopPct: Math.min(baseStop, cap),
       ...(defaultTrail ? { trail: defaultTrail } : {}),
+      ...(scaleOut ? { scaleOut } : {}),
     };
   }
   const hardDefault =
@@ -167,6 +194,7 @@ export function resolveExitPlan(
     ...(e?.invalidationPrice !== undefined ? { invalidationPrice: e.invalidationPrice } : {}),
     ...(e?.target !== undefined ? { target: e.target } : {}),
     ...(trail ? { trail } : {}),
+    ...(scaleOut ? { scaleOut } : {}),
     timeStopHours: e?.timeStopHours ?? cfg.exit_engine.horizon_hours[entry.horizon ?? 'days'],
   };
 }

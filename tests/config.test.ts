@@ -334,6 +334,8 @@ describe('exit_engine config', () => {
       native_stop_ratchet: { enabled: false },
       // Debounce defaults are byte-identical to no debounce (1 tick, size 0).
       trail_debounce: { confirm_ticks: 1, min_exit_top_size: 0 },
+      // Tier-3 machinery ships dark; enable condition pre-registered.
+      scale_out: { enabled: false, target_fraction: 0.5 },
     });
   });
 

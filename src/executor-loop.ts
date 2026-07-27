@@ -12,7 +12,7 @@ import { appendAudit } from './audit.js';
 import { evaluateExit, resolveExitPlan } from './exits.js';
 import { desiredProtectiveStop, planStopAction } from './trailing-stop.js';
 import { ensureOut, OUT_DIR, readJsonIfExists, thesisPath } from './paths.js';
-import { prunePositionPeaks, readHaltState, setTrailPending, trackPositionPeak, updatePeakEquity, writeHalt } from './state.js';
+import { prunePositionPeaks, readHaltState, setTargetScaledOut, setTrailPending, trackPositionPeak, updatePeakEquity, writeHalt } from './state.js';
 import { riskCheck, type RiskContext } from './risk.js';
 import type { BrokerClient } from './broker/client.js';
 import { AlpacaBroker } from './broker/client.js';
@@ -444,6 +444,9 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
     const mark = isLong ? quote.bid : quote.ask;
     let exitReasons: string[] | null = null;
     let trigger: string | undefined;
+    // Scale-out: fraction of the position this exit covers (1 = full; only a
+    // scale-out target trigger sets < 1).
+    let exitFraction = 1;
     // Plan + peak from the engine path, reused below to attach a protective
     // OCO leg to RTH exit orders. Left undefined on the legacy path so it
     // stays byte-identical to the pre-engine executor.
@@ -465,6 +468,7 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
         peakFavorablePrice: peak.peak,
         nowMs: now.getTime(),
         plan,
+        ...(peak.targetScaledOut ? { targetAlreadyScaled: true } : {}),
       });
       // Trail-family debounce (trail retrace + breakeven floor share the
       // 'trail' trigger): require the trigger on confirm_ticks consecutive
@@ -501,6 +505,7 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
       if (decision.exit) {
         exitReasons = [decision.reason ?? decision.trigger ?? 'exit'];
         trigger = decision.trigger;
+        exitFraction = decision.fraction ?? 1;
       } else if (entry && resolved) {
         const judged = await judgeTick(
           cfg,
@@ -548,9 +553,22 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
       }
     }
     if (!exitReasons) continue;
+    // Scale-out sizing: a fractional target exit covers part of the position;
+    // whole-share flooring can round a tiny position up to a full exit.
+    const absQty = Math.abs(position.qty);
+    const exitQty =
+      exitFraction < 1 ? Math.min(absQty, Math.max(1, Math.floor(absQty * exitFraction))) : absQty;
+    const isFullExit = exitQty >= absQty;
     appendAudit({
       kind: 'exit',
-      data: { ticker, reasons: exitReasons, trigger, stop: trigger === 'hard_stop', orphan: !entry },
+      data: {
+        ticker,
+        reasons: exitReasons,
+        trigger,
+        stop: trigger === 'hard_stop',
+        orphan: !entry,
+        ...(isFullExit ? {} : { fraction: exitFraction, qty: exitQty, of: absQty }),
+      },
     });
     // Cancel any resting order for this ticker first — notably an RTH stop-loss
     // leg — so the exit doesn't race a still-live protective order.
@@ -584,7 +602,7 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
     const order: ProposedOrder = {
       ticker: position.ticker,
       side: isLong ? 'sell' : 'buy',
-      qty: Math.abs(position.qty),
+      qty: exitQty,
       limitPrice: exitLimit,
       intent: 'exit',
       reason: exitReasons.join('; ') || 'invalidation triggered',
@@ -617,6 +635,10 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
       appendAudit({ kind: 'order_placed', data: placed });
       summary.exitsPlaced++;
       exitOrderedTickers.add(ticker);
+      // A placed partial target exit arms the once-only marker: the target
+      // trigger stays silent for the remainder from the next tick on. The
+      // remainder is re-covered by the stop ratchet next tick (qty drift).
+      if (!isFullExit) setTargetScaledOut(ticker);
     } else {
       appendAudit({ kind: 'order_rejected', data: { order, reasons: risk.reasons } });
       summary.rejected++;

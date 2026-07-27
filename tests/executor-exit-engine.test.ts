@@ -393,6 +393,85 @@ describe('re-entry cooldown after an exit', () => {
   });
 });
 
+describe('scale-out at target (exit_engine.scale_out)', () => {
+  it('takes the fraction once, persists the marker, and stays silent next tick', async () => {
+    const cfg = ConfigSchema.parse({
+      mode: 'paper',
+      exit_engine: { scale_out: { enabled: true, target_fraction: 0.5 } },
+    });
+    const thesis: Thesis = {
+      date: YMD,
+      kind: 'offhours',
+      generatedAt: '2026-07-14T21:05:00.000Z',
+      expiresAt: '2026-07-16T00:00:00.000Z',
+      entries: [
+        {
+          ticker: 'NVDA',
+          direction: 'long',
+          weightedConviction: 0.6,
+          limitBand: { low: 195, high: 205 },
+          targetNotionalUsd: 3600,
+          narrative: 'ai capex',
+          invalidationConditions: [],
+          horizon: 'days',
+          exit: { hardStopPct: 8, target: 210, timeStopHours: 240 } as never,
+        },
+      ],
+      skipped: [],
+    };
+    writeThesis(thesis);
+    const nvdaLong = {
+      ticker: 'NVDA',
+      qty: 18,
+      avgEntryPrice: 201.47,
+      marketValue: 3789,
+      unrealizedPl: 163,
+      side: 'long' as const,
+    };
+    const targetQuote = (asOf: Date): QuoteSnapshot => ({
+      ticker: 'NVDA',
+      bid: 210.5,
+      ask: 210.6,
+      bidSize: 500,
+      askSize: 500,
+      last: 210.55,
+      asOf: asOf.toISOString(),
+    });
+
+    const placed1: ProposedOrder[] = [];
+    await runTick({
+      cfg,
+      now: NOW,
+      broker: fakeBroker({ equity: 100000, cash: 96000, positions: [nvdaLong] }, placed1),
+      marketData: fakeMd([targetQuote(NOW)]),
+      llm: {} as never,
+    });
+    expect(placed1).toHaveLength(1);
+    expect(placed1[0]).toMatchObject({ ticker: 'NVDA', side: 'sell', qty: 9, intent: 'exit' });
+    expect(placed1[0]!.reason).toContain('scale-out 50%');
+    const peaks = JSON.parse(
+      fs.readFileSync(path.join(dir, 'out', 'position-peaks.json'), 'utf8'),
+    ) as Record<string, { targetScaledOut?: boolean }>;
+    expect(peaks.NVDA!.targetScaledOut).toBe(true);
+
+    // Next tick, remainder still above target: the trigger stays silent.
+    judgeTick.mockResolvedValue({ proceed: false, exitPosition: false, reasons: [] });
+    const later = new Date(NOW.getTime() + 15 * 60_000);
+    const placed2: ProposedOrder[] = [];
+    await runTick({
+      cfg,
+      now: later,
+      broker: fakeBroker(
+        { equity: 100000, cash: 96000, positions: [{ ...nvdaLong, qty: 9 }] },
+        placed2,
+      ),
+      marketData: fakeMd([targetQuote(later)]),
+      llm: {} as never,
+    });
+    expect(placed2).toHaveLength(0);
+  });
+});
+
 describe('own-earnings entry guard', () => {
   it('blocks a new entry on a name reporting inside the window; degrades open on no data', async () => {
     const thesis = fslrThesis({ hardStopPct: 8, timeStopHours: 240 });
