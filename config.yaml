@@ -1,10 +1,15 @@
 mode: paper
 live_trading_acknowledged: false
 universe:
-  nominations_per_agent: 5
-  max_candidates: 15
+  nominations_per_agent: 7   # raised 2026-07-27 (sample-rate push: more shots on goal)
+  max_candidates: 25         # raised 2026-07-27 (sample-rate push)
   min_price: 5
-  min_avg_dollar_volume: 20000000
+  # CONSOLIDATED dollar volume since 2026-07-27: daily bars now follow
+  # data_feed (SIP), so volume is full-tape. Under the old hardcoded IEX bars
+  # this floor was computed on single-venue volume (~2-3% of tape) and behaved
+  # like a ~$0.7-1B consolidated floor. $50M consolidated keeps real liquidity
+  # while widening the universe far beyond the accidental mega-cap filter.
+  min_avg_dollar_volume: 50000000
   exclude: []
 sessions:
   premarket: true       # re-enabled 2026-07-14 (SIP feed now covers off-hours)
@@ -16,35 +21,34 @@ agent_weights:
   macro: 0.6
   sentiment: 1
   bear: 1.2
-# 0.55 chosen from the Jan-Jun 2026 rev2 sweep. That measurement was made
-# under SIP quotes with off-hours sessions forced on, BEFORE the P0 entry
-# blackout shipped: ~7 trades per 50 sampled days in THAT regime, not this
-# config. Production parity (parity-rth-iex run, 2026-07-10; RTH-only, IEX,
-# shipped gates): theses form on 14/50 days but 0 entries place — the evening
-# thesis is kind=offhours and RTH ticks only consume a kind=rth thesis. The
-# 09:00 `pipeline rth` path is now simulated behind `backtest.ts run
-# --rth-thesis` (tag parity-rth-iex-rthsim, 2026-07-10): 7 closed trades per
-# 50 sampled days (~0.7/week) on the deployed path — but the simulated morning
-# thesis reuses the D 17:00 verdicts (no overnight news / morning scans), see
-# REPORT.md R3.4. Behavioral expectation only: no positive edge is established
-# at any threshold — paper soak is the test.
-conviction_threshold: 0.55
+# Lowered 0.55 -> 0.50 on 2026-07-27 as part of the sample-rate push: at ~0.7
+# trades/week the 50-trade governance gate (min_trades_for_economic_claim)
+# takes ~70 weeks to clear, so the evaluation loop could never converge. The
+# paper account optimizes for INFORMATION rate, not P&L: per-trade size is
+# halved below (max_position_pct / max_order_notional_usd) so total risk stays
+# roughly constant while trade count targets 3-5/week. Measure for 2 weeks and
+# nudge +/-0.02 as needed. (History: 0.55 came from the Jan-Jun 2026 rev2
+# sweep; parity-rth-iex-rthsim measured ~0.7 closed trades/week on the deployed
+# path. No positive edge is established at any threshold — paper soak is the
+# test. See REPORT.md R3.4.)
+conviction_threshold: 0.50
 quorum: 3
 min_agreeing: 2
-max_position_pct: 5
+max_position_pct: 2.5     # halved 2026-07-27 (sample-rate push: half size, ~2x trades)
 max_daily_deploy_pct: 10
 # Deploy-budget ordering + concentration (deterministic sizing discipline).
 # The executor funds thesis entries in array order until the deploy cap binds,
 # so ordering decides which names get funded first.
 deploy_priority: conviction    # conviction | conviction_per_risk (÷ realized vol)
-min_position_notional_usd: 250 # drop sub-floor positions (whole-share dust).
-                               # NOTE: sizing base = min(order cap, equity·pos%);
-                               # at equity < ~$5k this floor silently drops
-                               # marginal entries — lower it for small accounts.
-max_open_names: 5              # cap entries per thesis, best-conviction first.
-                               # Raised to 5 for the seeded starter basket.
-                               # Coherent: 5 × max_position_pct 5% = 25% =
-                               # max_gross_exposure_pct, so the name cap is
+min_position_notional_usd: 125 # drop sub-floor positions (whole-share dust).
+                               # Halved 2026-07-27 with the per-trade size cut
+                               # so the floor doesn't silently eat the smaller
+                               # positions. NOTE: sizing base = min(order cap,
+                               # equity·pos%); scale with account size.
+max_open_names: 8              # cap entries per thesis, best-conviction first.
+                               # Raised to 8 on 2026-07-27 (sample-rate push).
+                               # Coherent: 8 × max_position_pct 2.5% = 20% <=
+                               # max_gross_exposure_pct 25%, so the name cap is
                                # actually reachable (not shadowed by gross).
 # Cross-day exposure backstops (entries only), above the per-day deploy cap.
 # gross = total book ceiling (= max_open_names full-size names). Raised to hold
@@ -90,24 +94,53 @@ max_position_loss_pct: 8    # per-position hard stop, checked each tick
 exit_engine:
   enabled: true
   # Default trailing policy for EVERY position (orphans included; an
-  # entry-carried LLM trail overrides). Two tiers by peak unrealized gain:
-  # >= 1% ratchets the stop to breakeven; >= 5% trails 4% off the favorable
-  # peak (never below breakeven).
+  # entry-carried LLM trail overrides): >= 5% peak gain arms both the
+  # breakeven floor and a 4% trail off the favorable peak. The two-tier +1%
+  # breakeven arm was REMOVED 2026-07-27: +1% is inside one daily sigma for
+  # the ~40%-vol names this desk trades, so it force-scratched winners on
+  # noise (entered at ask, scratched at bid = realized -spread each time).
   trail:
     activate_pct: 5
     trail_pct: 4
     breakeven_floor: true
-    breakeven_at_pct: 1
   # Converge a resting GTC broker stop to the trail floor every tick so the
   # protection survives an engine outage. Never enable in backtest configs.
   native_stop_ratchet:
     enabled: true
-max_order_notional_usd: 2000
-max_spread_bps: 50
-data_feed: sip          # sip (paid, subscribed 2026-07-14): real consolidated NBBO. iex = free single-venue, unrepresentative spreads that trip the spread gate
+  # Trail-family exits (trail retrace / breakeven floor) need the trigger on 2
+  # consecutive ticks AND an exit-side displayed size >= 100 before firing —
+  # one thin off-hours bid flicker must not liquidate a position into itself.
+  # hard_stop / invalidation / target / time_stop are never debounced.
+  trail_debounce:
+    confirm_ticks: 2
+    min_exit_top_size: 100
+max_order_notional_usd: 1000  # halved 2026-07-27 (sample-rate push)
+max_spread_bps: 50      # flat fallback; superseded by execution.gates_by_session on SIP
+data_feed: sip          # sip (paid, subscribed 2026-07-14): real consolidated NBBO. iex = free single-venue, unrepresentative spreads that trip the spread gate. Since 2026-07-27 daily BARS also follow this feed (consolidated volume).
 max_quote_age_sec: 120  # reject quotes older than this — fail closed, never trade a stale book
 max_chase_pct: 1
 max_drop_pct: 3
+# Execution hygiene, enabled 2026-07-27. These are cost controls, not alpha
+# signals: the marketable-both-ways default paid the spread on every round
+# trip by construction. All down-only / fail-closed.
+execution:
+  cost_scalar:
+    enabled: true            # shrink size as live spread eats the edge (floor 0.5, 45bps ref)
+  participation:
+    enabled: true            # cap qty at 25% of displayed take-side size
+  # Rest halfway inside the spread instead of crossing it. Fills become
+  # less certain (an unfilled entry is re-evaluated next tick, no chasing);
+  # that trade-off is the point — stop donating the spread.
+  entry_aggressiveness: 0.5
+  gates_by_session:
+    enabled: true            # SIP-only session-calibrated spread/age/size gates (rth 20bps, pre/ah 80bps)
+# Re-entry cooldown: never re-buy a name the same day it was exited/stopped.
+entry_cooldown_after_exit: true
+# Cache judge decisions on (entry, headlines, position side) — unchanged
+# inputs return the cached decision instead of re-rolling the LLM every tick.
+# Also acts as the decline cooldown; cuts judge calls ~10x.
+judge_cache:
+  enabled: true
 daily_loss_halt_pct: 3
 executor_interval_min: 15
 thesis_run_time_et: 17:00

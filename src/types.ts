@@ -142,6 +142,11 @@ export interface ProposedOrder {
   // Regular-session entries attach a native stop-loss at this price (Alpaca
   // OTO). Only set on RTH entries — extended-hours stops do not execute.
   stopLoss?: number;
+  // Regular-session exits may pair the limit with a protective stop via Alpaca
+  // OCO, so an unfilled exit limit never leaves the position stop-less. Only
+  // set on RTH exits when the stop is still on the protective side of the
+  // limit (a triggered stop/trail exit has already crossed its level).
+  protectiveStop?: number;
 }
 /** Simple resting protective stop placed by the trailing-stop ratchet. */
 export interface ProposedStopOrder {

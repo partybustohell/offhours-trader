@@ -197,6 +197,22 @@ export interface BrokerClient {
    *  asset lookup fails, so the caller fails closed. */
   getAsset(ticker: string): Promise<{ shortable: boolean; easyToBorrow: boolean } | null>;
 }
+// getFills (fill-activity history for the feedback loop) is deliberately NOT
+// part of BrokerClient: the executor never reads history, and the backtest's
+// sim broker must not be forced to fake it. The feedback script uses
+// AlpacaBroker concretely.
+
+/** One execution from GET /v2/account/activities/FILL (read-only history). */
+export interface FillActivity {
+  id: string;
+  transactionTime: string; // ISO
+  ticker: string;
+  /** 'sell_short' opens a short; plain 'sell' closes a long. */
+  side: 'buy' | 'sell' | 'sell_short';
+  qty: number;
+  price: number;
+  orderId?: string;
+}
 
 export class AlpacaBroker implements BrokerClient {
   private readonly mode: Mode;
@@ -298,19 +314,31 @@ export class AlpacaBroker implements BrokerClient {
       qty: String(o.qty),
       side: o.side,
       type: 'limit',
-      time_in_force: 'day',
-      // Alpaca rejects sub-penny limit prices on stocks >= $1 with a 422.
-      limit_price: o.limitPrice.toFixed(2),
-      extended_hours: o.extendedHours,
       client_order_id: clientOrderId,
     };
-    // Regular-session entries carry a native stop-loss via a one-triggers-other
-    // order: the entry fills, then Alpaca activates the stop. Extended-hours
-    // orders cannot use this (stops do not execute there), so stopLoss is only
-    // ever set on RTH entries.
-    if (o.stopLoss !== undefined && !o.extendedHours) {
-      body.order_class = 'oto';
-      body.stop_loss = { stop_price: o.stopLoss.toFixed(2) };
+    if (o.intent === 'exit' && o.protectiveStop !== undefined && !o.extendedHours) {
+      // Regular-session exit as an OCO pair: the marketable exit limit plus a
+      // protective stop, one cancels the other. An unfilled exit limit then
+      // never leaves the position stop-less between ticks. GTC so the stop leg
+      // survives overnight if the limit rests. Extended-hours exits cannot use
+      // this (stops do not execute there; the caller omits protectiveStop).
+      body.order_class = 'oco';
+      body.time_in_force = 'gtc';
+      body.take_profit = { limit_price: o.limitPrice.toFixed(2) };
+      body.stop_loss = { stop_price: o.protectiveStop.toFixed(2) };
+    } else {
+      body.time_in_force = 'day';
+      // Alpaca rejects sub-penny limit prices on stocks >= $1 with a 422.
+      body.limit_price = o.limitPrice.toFixed(2);
+      body.extended_hours = o.extendedHours;
+      // Regular-session entries carry a native stop-loss via a one-triggers-other
+      // order: the entry fills, then Alpaca activates the stop. Extended-hours
+      // orders cannot use this (stops do not execute there), so stopLoss is only
+      // ever set on RTH entries.
+      if (o.stopLoss !== undefined && !o.extendedHours) {
+        body.order_class = 'oto';
+        body.stop_loss = { stop_price: o.stopLoss.toFixed(2) };
+      }
     }
     try {
       const raw = await this.request('/v2/orders', {
@@ -384,6 +412,43 @@ export class AlpacaBroker implements BrokerClient {
   async cancelOrder(id: string): Promise<void> {
     if (this.mode === 'dry-run') return;
     await this.request(`/v2/orders/${id}`, { method: 'DELETE' });
+  }
+
+  /** Paginated fill history (works in every mode — activities are read-only). */
+  async getFills(afterIso: string): Promise<FillActivity[]> {
+    interface RawActivity {
+      id?: string;
+      transaction_time?: string;
+      symbol?: string;
+      side?: string;
+      qty?: string;
+      price?: string;
+      order_id?: string;
+    }
+    const PAGE_SIZE = 100;
+    const out: FillActivity[] = [];
+    let pageToken: string | undefined;
+    do {
+      const params = new URLSearchParams({ after: afterIso, page_size: String(PAGE_SIZE) });
+      if (pageToken) params.set('page_token', pageToken);
+      const raw = await this.request(`/v2/account/activities/FILL?${params.toString()}`);
+      const items = Array.isArray(raw) ? (raw as RawActivity[]) : [];
+      for (const a of items) {
+        const side = a.side === 'buy' || a.side === 'sell' || a.side === 'sell_short' ? a.side : null;
+        if (!a.id || !a.symbol || !side) continue;
+        out.push({
+          id: a.id,
+          transactionTime: a.transaction_time ?? '',
+          ticker: a.symbol,
+          side,
+          qty: Number(a.qty ?? 0),
+          price: Number(a.price ?? 0),
+          ...(a.order_id ? { orderId: a.order_id } : {}),
+        });
+      }
+      pageToken = items.length === PAGE_SIZE ? items[items.length - 1]?.id : undefined;
+    } while (pageToken);
+    return out;
   }
 
   async cancelOrdersFor(ticker: string): Promise<void> {

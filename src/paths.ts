@@ -22,6 +22,9 @@ export const peakPath = () => path.join(OUT_DIR, 'peak.json');
 /** Per-position favorable-peak state for the exit engine's trailing stop
  *  (ticker -> { side, entryTimeMs, peak }); cleared as positions close. */
 export const peaksPath = () => path.join(OUT_DIR, 'position-peaks.json');
+/** Executor-judge decision cache (key -> { decision, atMs }); see
+ *  config judge_cache. Corrupt or missing degrades to cache-miss. */
+export const judgeCachePath = () => path.join(OUT_DIR, 'judge-cache.json');
 
 export function writeJsonAtomic(file: string, data: unknown): void {
   ensureOut();

@@ -254,6 +254,145 @@ describe('executor exit engine', () => {
   });
 });
 
+describe('thesis discovery (expiry decides validity, not filename age)', () => {
+  // Monday 2026-07-20, 09:00 ET premarket. The newest thesis is Friday
+  // 2026-07-17's, expiring Monday 20:00 ET — three calendar days back, which
+  // the old today/yesterday lookup could never find (the Monday-premarket
+  // blackout: the whole tick skipped, exits included).
+  const MONDAY = new Date('2026-07-20T13:00:00Z');
+
+  it('finds Friday evening thesis on Monday premarket and runs its exits', async () => {
+    const thesis = fslrThesis({ hardStopPct: 8, timeStopHours: 1 });
+    thesis.date = '2026-07-17';
+    thesis.generatedAt = '2026-07-17T21:05:00.000Z';
+    thesis.expiresAt = '2026-07-21T00:00:00.000Z'; // Mon 20:00 ET
+    writeThesis(thesis);
+    fs.writeFileSync(
+      path.join(dir, 'out', 'position-peaks.json'),
+      JSON.stringify({
+        FSLR: { side: 'short', entryTimeMs: MONDAY.getTime() - 2 * 3_600_000, peak: 220 },
+      }),
+    );
+    const placed: ProposedOrder[] = [];
+    await runTick({
+      cfg: baseCfg(),
+      now: MONDAY,
+      broker: fakeBroker({ equity: 100000, cash: 100000, positions: [shortPosition] }, placed),
+      marketData: fakeMd([
+        { ticker: 'FSLR', bid: 219.0, ask: 219.1, bidSize: 500, askSize: 500, last: 219.05, asOf: MONDAY.toISOString() },
+      ]),
+      llm: {} as never,
+    });
+    expect(placed).toHaveLength(1);
+    expect(placed[0]).toMatchObject({ ticker: 'FSLR', side: 'buy', intent: 'exit' });
+    expect(readAudit()).not.toContain('"stage":"no_thesis"');
+  });
+
+  it('exitEntryFor keeps a days-old thesis entry monitored (no orphan downgrade)', async () => {
+    // Active thesis today has no FSLR entry; the position was opened under a
+    // thesis 5 days back. Its entry-carried time stop must still fire (the old
+    // 2-day lookup degraded this position to stop-only and the time stop was
+    // unreachable).
+    const active = fslrThesis({ hardStopPct: 8, timeStopHours: 1 });
+    active.entries = []; // today's thesis exists but doesn't cover FSLR
+    writeThesis(active);
+    const old = fslrThesis({ hardStopPct: 8, timeStopHours: 1 });
+    old.date = '2026-07-10';
+    old.generatedAt = '2026-07-10T21:05:00.000Z';
+    old.expiresAt = '2026-07-11T00:00:00.000Z'; // long expired — irrelevant for exits
+    writeThesis(old);
+    fs.writeFileSync(
+      path.join(dir, 'out', 'position-peaks.json'),
+      JSON.stringify({
+        FSLR: { side: 'short', entryTimeMs: NOW.getTime() - 2 * 3_600_000, peak: 220 },
+      }),
+    );
+    const placed: ProposedOrder[] = [];
+    await runTick({
+      cfg: baseCfg(),
+      now: NOW,
+      broker: fakeBroker({ equity: 100000, cash: 100000, positions: [shortPosition] }, placed),
+      marketData: fakeMd([quote('FSLR', 219.0, 219.1)]),
+      llm: {} as never,
+    });
+    expect(placed).toHaveLength(1);
+    expect(placed[0]!.reason).toContain('time_stop');
+    expect(readAudit()).not.toContain('"stage":"orphan_position"');
+  });
+});
+
+describe('re-entry cooldown after an exit', () => {
+  it('blocks a new entry on a name with a filled protective stop today', async () => {
+    const thesis = fslrThesis({ hardStopPct: 8, timeStopHours: 240 });
+    thesis.entries[0]!.direction = 'long';
+    thesis.entries[0]!.limitBand = { low: 215, high: 225 };
+    writeThesis(thesis);
+    const cfg = baseCfg();
+    cfg.entry_cooldown_after_exit = true;
+    judgeTick.mockResolvedValue({ proceed: true, exitPosition: false, reasons: ['holds'] });
+    const placed: ProposedOrder[] = [];
+    const broker = fakeBroker({ equity: 100000, cash: 100000, positions: [] }, placed);
+    (broker as { getTodayOrders: () => Promise<unknown[]> }).getTodayOrders = async () => [
+      {
+        id: 'stop-1',
+        ticker: 'FSLR',
+        side: 'sell',
+        qty: 4,
+        type: 'stop',
+        limitPrice: 0,
+        stopPrice: 210,
+        status: 'filled',
+        submittedAt: NOW.toISOString(),
+        clientOrderId: 'tstop-abc',
+        filledQty: 4,
+      },
+    ];
+    await runTick({
+      cfg,
+      now: NOW,
+      broker,
+      marketData: fakeMd([quote('FSLR', 219.0, 219.1)]),
+      llm: {} as never,
+    });
+    expect(placed).toHaveLength(0);
+    expect(readAudit()).toContain('re-entry cooldown: exited today');
+  });
+
+  it('cooldown off (default): the same entry goes through', async () => {
+    const thesis = fslrThesis({ hardStopPct: 8, timeStopHours: 240 });
+    thesis.entries[0]!.direction = 'long';
+    thesis.entries[0]!.limitBand = { low: 215, high: 225 };
+    writeThesis(thesis);
+    judgeTick.mockResolvedValue({ proceed: true, exitPosition: false, reasons: ['holds'] });
+    const placed: ProposedOrder[] = [];
+    const broker = fakeBroker({ equity: 100000, cash: 100000, positions: [] }, placed);
+    (broker as { getTodayOrders: () => Promise<unknown[]> }).getTodayOrders = async () => [
+      {
+        id: 'stop-1',
+        ticker: 'FSLR',
+        side: 'sell',
+        qty: 4,
+        type: 'stop',
+        limitPrice: 0,
+        stopPrice: 210,
+        status: 'filled',
+        submittedAt: NOW.toISOString(),
+        clientOrderId: 'tstop-abc',
+        filledQty: 4,
+      },
+    ];
+    await runTick({
+      cfg: baseCfg(),
+      now: NOW,
+      broker,
+      marketData: fakeMd([quote('FSLR', 219.0, 219.1)]),
+      llm: {} as never,
+    });
+    expect(placed).toHaveLength(1);
+    expect(placed[0]!.intent).toBe('entry');
+  });
+});
+
 describe('macro-event entry blackout', () => {
   it('blocks entries inside the window but still places exits', async () => {
     // 09:00 ET on 2026-07-15 with a 09:15 event: inside [08:45, 09:30).
@@ -292,6 +431,187 @@ describe('macro-event entry blackout', () => {
     const audit = readAudit();
     expect(audit).toContain('"stage":"event_blackout"');
     expect(audit).toContain('TEST-EVENT');
+  });
+});
+
+describe('trail debounce (exit_engine.trail_debounce)', () => {
+  const debounceCfg = (): Config =>
+    ConfigSchema.parse({
+      mode: 'paper',
+      exit_engine: {
+        trail: { activate_pct: 5, trail_pct: 4 },
+        trail_debounce: { confirm_ticks: 2, min_exit_top_size: 100 },
+      },
+    });
+
+  const nvdaLong = {
+    ticker: 'NVDA',
+    qty: 18,
+    avgEntryPrice: 201.47,
+    marketValue: 3543,
+    unrealizedPl: -83,
+    side: 'long' as const,
+  };
+
+  function seedPeak(at: Date): void {
+    fs.writeFileSync(
+      path.join(dir, 'out', 'position-peaks.json'),
+      JSON.stringify({
+        NVDA: { side: 'long', entryTimeMs: at.getTime() - 6 * 86_400_000, peak: 214.39 },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(dir, 'out', `thesis-${YMD}.json`),
+      JSON.stringify({
+        date: YMD,
+        kind: 'offhours',
+        generatedAt: '2026-07-14T21:05:00.000Z',
+        expiresAt: '2026-07-16T00:00:00.000Z',
+        entries: [],
+        skipped: [],
+      }),
+    );
+  }
+
+  const retracedQuote = (asOf: Date): QuoteSnapshot => ({
+    ticker: 'NVDA',
+    bid: 197.0,
+    ask: 197.1,
+    bidSize: 500,
+    askSize: 500,
+    last: 197.05,
+    asOf: asOf.toISOString(),
+  });
+
+  it('first trigger tick goes pending; the second consecutive tick exits', async () => {
+    seedPeak(NOW);
+    const placed1: ProposedOrder[] = [];
+    await runTick({
+      cfg: debounceCfg(),
+      now: NOW,
+      broker: fakeBroker({ equity: 100000, cash: 78000, positions: [nvdaLong] }, placed1),
+      marketData: fakeMd([retracedQuote(NOW)]),
+      llm: {} as never,
+    });
+    expect(placed1).toHaveLength(0);
+    expect(readAudit()).toContain('"stage":"trail_pending"');
+    const peaks = JSON.parse(
+      fs.readFileSync(path.join(dir, 'out', 'position-peaks.json'), 'utf8'),
+    ) as Record<string, { trailPendingCount?: number }>;
+    expect(peaks.NVDA!.trailPendingCount).toBe(1);
+
+    const later = new Date(NOW.getTime() + 15 * 60_000);
+    const placed2: ProposedOrder[] = [];
+    await runTick({
+      cfg: debounceCfg(),
+      now: later,
+      broker: fakeBroker({ equity: 100000, cash: 78000, positions: [nvdaLong] }, placed2),
+      marketData: fakeMd([retracedQuote(later)]),
+      llm: {} as never,
+    });
+    expect(placed2).toHaveLength(1);
+    expect(placed2[0]!.reason).toContain('trail');
+  });
+
+  it('a thin exit-side book never counts toward confirmation', async () => {
+    seedPeak(NOW);
+    const thin: QuoteSnapshot = { ...retracedQuote(NOW), bidSize: 1 };
+    const placed: ProposedOrder[] = [];
+    await runTick({
+      cfg: debounceCfg(),
+      now: NOW,
+      broker: fakeBroker({ equity: 100000, cash: 78000, positions: [nvdaLong] }, placed),
+      marketData: fakeMd([thin]),
+      llm: {} as never,
+    });
+    expect(placed).toHaveLength(0);
+    expect(readAudit()).toContain('"sizeOk":false');
+    const peaks = JSON.parse(
+      fs.readFileSync(path.join(dir, 'out', 'position-peaks.json'), 'utf8'),
+    ) as Record<string, { trailPendingCount?: number }>;
+    expect(peaks.NVDA!.trailPendingCount).toBeUndefined();
+  });
+
+  it('hard stop is never debounced', async () => {
+    seedPeak(NOW);
+    // loss vs entry 201.47 at bid 180 = 10.7% >= 8% hard stop
+    const crashed: QuoteSnapshot = { ...retracedQuote(NOW), bid: 180.0, ask: 180.2, bidSize: 1 };
+    const placed: ProposedOrder[] = [];
+    await runTick({
+      cfg: debounceCfg(),
+      now: NOW,
+      broker: fakeBroker({ equity: 100000, cash: 78000, positions: [nvdaLong] }, placed),
+      marketData: fakeMd([crashed]),
+      llm: {} as never,
+    });
+    expect(placed).toHaveLength(1);
+    expect(placed[0]!.reason).toContain('hard_stop');
+  });
+});
+
+describe('OCO protective exit legs (RTH only)', () => {
+  const RTH_NOW = new Date('2026-07-15T15:00:00Z'); // 11:00 ET
+
+  it('judge-triggered RTH exit carries a protective stop on the far side of the limit', async () => {
+    const thesis: Thesis = {
+      date: YMD,
+      kind: 'rth',
+      generatedAt: '2026-07-15T13:00:00.000Z',
+      expiresAt: '2026-07-15T21:00:00.000Z',
+      entries: [
+        {
+          ticker: 'FSLR',
+          direction: 'short',
+          weightedConviction: 0.6,
+          limitBand: { low: 218, high: 228 },
+          targetNotionalUsd: 900,
+          narrative: 'momentum short',
+          invalidationConditions: ['closes above 232'],
+          horizon: 'days',
+          exit: { hardStopPct: 8, timeStopHours: 240 } as never,
+        },
+      ],
+      skipped: [],
+    };
+    writeThesis(thesis, 'rth');
+    const cfg = baseCfg();
+    cfg.sessions.regularhours = true;
+    judgeTick.mockResolvedValue({ proceed: false, exitPosition: true, reasons: ['invalidation triggered'] });
+    const placed: ProposedOrder[] = [];
+    await runTick({
+      cfg,
+      now: RTH_NOW,
+      broker: fakeBroker({ equity: 100000, cash: 100000, positions: [shortPosition] }, placed),
+      marketData: fakeMd([
+        { ticker: 'FSLR', bid: 219.0, ask: 219.1, bidSize: 500, askSize: 500, last: 219.05, asOf: RTH_NOW.toISOString() },
+      ]),
+      llm: {} as never,
+    });
+    expect(placed).toHaveLength(1);
+    expect(placed[0]!.intent).toBe('exit');
+    expect(placed[0]!.extendedHours).toBe(false);
+    // short protective stop: entry 222.23 * 1.08 = 240.01, above the 219.10 limit
+    expect(placed[0]!.protectiveStop).toBe(240.01);
+  });
+
+  it('extended-hours exits stay plain (stops cannot execute there)', async () => {
+    writeThesis(fslrThesis({ hardStopPct: 8, timeStopHours: 1 }));
+    fs.writeFileSync(
+      path.join(dir, 'out', 'position-peaks.json'),
+      JSON.stringify({
+        FSLR: { side: 'short', entryTimeMs: NOW.getTime() - 2 * 3_600_000, peak: 220 },
+      }),
+    );
+    const placed: ProposedOrder[] = [];
+    await runTick({
+      cfg: baseCfg(),
+      now: NOW, // premarket
+      broker: fakeBroker({ equity: 100000, cash: 100000, positions: [shortPosition] }, placed),
+      marketData: fakeMd([quote('FSLR', 219.0, 219.1)]),
+      llm: {} as never,
+    });
+    expect(placed).toHaveLength(1);
+    expect(placed[0]!.protectiveStop).toBeUndefined();
   });
 });
 
@@ -509,6 +829,25 @@ describe('native stop ratchet', () => {
     expect(placed[0]).toMatchObject({ ticker: 'NVDA', side: 'sell', qty: 18, intent: 'exit' });
     expect(readAudit()).not.toContain('duplicate open order');
     expect(calls.stops).toEqual([]); // exit placed: the ratchet must stay away
+  });
+
+  it('no unexpired thesis: exits and the ratchet still run (positions never go dark)', async () => {
+    // No thesis file at all. The old executor returned before the exit loop,
+    // leaving open positions unmonitored (every Monday premarket). Now the
+    // tick continues in exits-only mode: the ratchet must still place the
+    // protective stop.
+    const calls: StopCalls = { stops: [], cancels: [] };
+    await runTick({
+      cfg: ratchetCfg(),
+      now: NOW,
+      broker: ratchetBroker({ equity: 100000, cash: 78000, positions: [nvdaLong] }, [], calls),
+      marketData: fakeMd([quote('NVDA', 196.0, 196.1)]),
+      llm: {} as never,
+    });
+    expect(calls.stops).toEqual([{ ticker: 'NVDA', side: 'sell', qty: 18, stopPrice: 185.35 }]);
+    const audit = readAudit();
+    expect(audit).toContain('"stage":"no_thesis"');
+    expect(audit).toContain('"action":"exits_only"');
   });
 
   it('skips a position that exited this tick instead of re-arming a stop under its exit order', async () => {

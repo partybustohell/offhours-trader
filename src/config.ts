@@ -333,6 +333,20 @@ export const ConfigSchema = z.object({
       // Off by default — backtests must never enable it (SimLedger has no
       // stop-trigger semantics and fails loud).
       native_stop_ratchet: z.object({ enabled: z.boolean().default(false) }).default({}),
+      // Live-only debounce for TRAIL-family exits (trail retrace + breakeven
+      // floor): require the trigger on `confirm_ticks` consecutive ticks, and
+      // only count a tick whose exit-side displayed size is at least
+      // `min_exit_top_size` (same unit as the quote's bid/ask size — a 1-share
+      // off-hours bid flicker must not liquidate a position into itself).
+      // hard_stop / invalidation_price / target / time_stop are NEVER
+      // debounced. Defaults (1 tick, size 0) are byte-identical to today, so
+      // backtest cells are unaffected unless a cell opts in.
+      trail_debounce: z
+        .object({
+          confirm_ticks: z.number().int().min(1).max(10).default(1),
+          min_exit_top_size: z.number().min(0).default(0),
+        })
+        .default({}),
       // Fallback timeStopHours by verdict horizon (conservative; revisit on soak).
       horizon_hours: z
         .object({
@@ -342,6 +356,27 @@ export const ConfigSchema = z.object({
         .default({}),
     })
     .default({}),
+  // Disk cache for executor-judge decisions (out/judge-cache.json), keyed on
+  // the decision-relevant inputs — model, full thesis entry, headlines, and
+  // position SIDE — and deliberately EXCLUDING the live quote: the judge is
+  // instructed not to re-derive numbers (all quantitative gates are code-
+  // enforced), so unchanged entry+headlines must yield the same decision
+  // instead of re-rolling LLM nondeterminism every tick. This is also the
+  // decline cooldown: a declined entry stays declined until its inputs change.
+  // Default OFF so backtest cells (which replay many ticks against the
+  // canonical quote-inclusive cache) are byte-identical; enabled in config.yaml
+  // for the live executor.
+  judge_cache: z
+    .object({
+      enabled: z.boolean().default(false),
+      max_age_hours: z.number().positive().default(72),
+    })
+    .default({}),
+  // Re-entry cooldown: block a NEW entry on any name that already had an exit
+  // order or a filled protective stop today (derived from broker order history,
+  // so it is crash-safe and stateless). Prevents stop-out -> re-buy churn on
+  // the same thesis. Default OFF for backtest parity; enabled in config.yaml.
+  entry_cooldown_after_exit: z.boolean().default(false),
   model: z
     .object({
       analysts: z.string().default('claude-sonnet-5'),

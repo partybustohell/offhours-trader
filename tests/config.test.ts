@@ -328,6 +328,8 @@ describe('exit_engine config', () => {
       horizon_hours: { days: 30, weeks: 120 },
       // No default trail (legacy no-regression); ratchet opt-in per config.
       native_stop_ratchet: { enabled: false },
+      // Debounce defaults are byte-identical to no debounce (1 tick, size 0).
+      trail_debounce: { confirm_ticks: 1, min_exit_top_size: 0 },
     });
   });
 

@@ -62,6 +62,9 @@ export interface PositionPeak {
   entryTimeMs: number;
   /** Favorable extreme since entry: high for longs, low for shorts. */
   peak: number;
+  /** Consecutive ticks a trail-family exit trigger has fired (debounce state,
+   *  see exit_engine.trail_debounce). Absent/0 = no pending trigger. */
+  trailPendingCount?: number;
 }
 type PeaksState = Record<string, PositionPeak>;
 
@@ -103,11 +106,28 @@ export function trackPositionPeak(
           side,
           entryTimeMs: prev.entryTimeMs,
           peak: side === 'long' ? Math.max(prev.peak, mark) : Math.min(prev.peak, mark),
+          // carry the debounce counter; a side flip below starts fresh
+          ...(prev.trailPendingCount ? { trailPendingCount: prev.trailPendingCount } : {}),
         }
       : { side, entryTimeMs: nowMs, peak: mark };
   peaks[key] = rec;
   writeJsonAtomic(peaksPath(), peaks);
   return rec;
+}
+
+/**
+ * Persist the trail-debounce counter for a held position. 0 clears the field.
+ * No-op if the ticker has no peak record (nothing to debounce against).
+ */
+export function setTrailPending(ticker: string, count: number): void {
+  const peaks = readPeaks();
+  const key = ticker.toUpperCase();
+  const rec = peaks[key];
+  if (!rec) return;
+  if (count > 0) rec.trailPendingCount = count;
+  else if (rec.trailPendingCount !== undefined) delete rec.trailPendingCount;
+  else return; // already clear — skip the write
+  writeJsonAtomic(peaksPath(), peaks);
 }
 
 /** Drop peak records for tickers no longer held (position closed). */

@@ -71,6 +71,9 @@ export class AlpacaMarketData {
   private readonly headers: Record<string, string>;
   private readonly fetchFn: FetchFn;
   private readonly sleep: SleepFn;
+  // Quote AND daily-bar feed. Bars matter: IEX bar volume is single-venue
+  // (~2-3% of tape), so every volume-derived quantity (ADV floor, Amihud,
+  // rel-volume) computed on IEX bars is off by ~30-50x vs consolidated.
   private readonly quoteFeed: 'iex' | 'sip';
 
   // Market data works with paper keys in every mode, including live.
@@ -143,7 +146,7 @@ export class AlpacaMarketData {
         const params = new URLSearchParams({
           symbols: group.join(','),
           timeframe: '1Day',
-          feed: 'iex',
+          feed: this.quoteFeed,
           start,
           limit: String(Math.min(10_000, group.length * limit)),
         });

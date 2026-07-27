@@ -53,7 +53,11 @@ export async function runPipeline(deps: PipelineDeps = {}): Promise<Thesis> {
   if (!deps.llm && !process.env.ANTHROPIC_API_KEY) {
     throw new Error('ANTHROPIC_API_KEY is not set; add it to .env');
   }
-  const md = deps.marketData ?? new AlpacaMarketData();
+  // data_feed governs bars here: the ADV floor and every volume-derived
+  // feature must see consolidated volume when SIP is subscribed, not the
+  // single-venue IEX default this constructor would otherwise fall back to.
+  const md =
+    deps.marketData ?? new AlpacaMarketData(process.env, globalThis.fetch, undefined, cfg.data_feed);
 
   appendAudit({ kind: 'tick', data: { stage: 'pipeline_start', date: ymd, mode: cfg.mode, thesisKind: kind } });
 

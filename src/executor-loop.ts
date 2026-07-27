@@ -2,7 +2,7 @@ import 'dotenv/config';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import type { ProposedOrder, QuoteSnapshot, Thesis, ThesisKind } from './types.js';
+import type { ExitPlan, ProposedOrder, QuoteSnapshot, Thesis, ThesisEntry, ThesisKind } from './types.js';
 import type { Config } from './config.js';
 import { loadConfig } from './config.js';
 import { currentSession, nowET, sessionEnabled } from './clock.js';
@@ -10,9 +10,9 @@ import { activeEventBlackout, entryTimingAllowed, sessionGate } from './session-
 import { costScalar, drawdownThrottle, participationQty, riskOffTriggered } from './signals.js';
 import { appendAudit } from './audit.js';
 import { evaluateExit, resolveExitPlan } from './exits.js';
-import { planStopAction } from './trailing-stop.js';
+import { desiredProtectiveStop, planStopAction } from './trailing-stop.js';
 import { ensureOut, OUT_DIR, readJsonIfExists, thesisPath } from './paths.js';
-import { prunePositionPeaks, readHaltState, trackPositionPeak, updatePeakEquity, writeHalt } from './state.js';
+import { prunePositionPeaks, readHaltState, setTrailPending, trackPositionPeak, updatePeakEquity, writeHalt } from './state.js';
 import { riskCheck, type RiskContext } from './risk.js';
 import type { BrokerClient } from './broker/client.js';
 import { AlpacaBroker } from './broker/client.js';
@@ -64,6 +64,30 @@ function loadUnexpiredThesis(ymd: string, now: Date, kind: ThesisKind): Thesis |
   if (!Number.isFinite(expires) || expires <= now.getTime()) return null;
   return raw;
 }
+
+// Thesis files are date-keyed, so validity must be decided by EXPIRY, not by
+// how far back the filename sits: a Friday evening thesis expires Monday
+// 20:00 ET and must still be found on Monday premarket (previously the lookup
+// stopped at yesterday, silently skipping the whole tick — including exit
+// monitoring — every Monday premarket and after any holiday or pipeline
+// outage). 7 days covers weekends + holiday clusters; expired files are
+// rejected by loadUnexpiredThesis regardless.
+const THESIS_LOOKBACK_DAYS = 7;
+
+export function findLatestUnexpiredThesis(now: Date, kind: ThesisKind): Thesis | null {
+  for (let back = 0; back <= THESIS_LOOKBACK_DAYS; back++) {
+    const ymd = nowET(new Date(now.getTime() - back * DAY_MS)).ymd;
+    const thesis = loadUnexpiredThesis(ymd, now, kind);
+    if (thesis) return thesis;
+  }
+  return null;
+}
+
+// How far back exitEntryFor searches for the thesis entry a HELD position was
+// opened under. Must exceed the longest horizon time-stop (weeks = 120h ≈ 5
+// trading days) plus weekend/holiday slack, or entry-carried invalidation /
+// target / time-stop levels silently degrade to orphan stop-only handling.
+const EXIT_ENTRY_LOOKBACK_DAYS = 14;
 
 /**
  * Deployment consumed today = entry orders only, identified by the
@@ -226,29 +250,43 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
     }
   }
 
-  const todayYmd = nowET(now).ymd;
-  const yesterdayYmd = nowET(new Date(now.getTime() - DAY_MS)).ymd;
   // The regular session trades its own same-morning thesis; pre/after-market
-  // trade the evening off-hours thesis (today, else yesterday's carry-over).
+  // trade the newest unexpired evening thesis (Friday's carries to Monday).
   const thesisKind: ThesisKind = session === 'rth' ? 'rth' : 'offhours';
   const extendedHours = session !== 'rth';
-  const thesis =
-    thesisKind === 'rth'
-      ? loadUnexpiredThesis(todayYmd, now, 'rth')
-      : (loadUnexpiredThesis(todayYmd, now, 'offhours') ??
-        loadUnexpiredThesis(yesterdayYmd, now, 'offhours'));
+  const thesis = findLatestUnexpiredThesis(now, thesisKind);
   if (!thesis) {
-    appendAudit({ kind: 'tick', data: { stage: 'no_thesis', session, thesisKind, action: 'skip' } });
-    return;
+    // No tradable thesis means no ENTRIES — but open positions must stay
+    // monitored. Exits, the hard stop, and the stop ratchet all run below;
+    // only the entry loop is starved (activeEntries is empty).
+    appendAudit({
+      kind: 'tick',
+      data: { stage: 'no_thesis', session, thesisKind, action: 'exits_only' },
+    });
   }
+  const activeEntries = thesis?.entries ?? [];
 
   let deployedTodayUsd = seedDeployedTodayUsd(todayOrders);
+
+  // Re-entry cooldown source: any exit-intent order today, or any FILLED stop
+  // (the ratchet's GTC stop or an OTO entry leg — matched by type because legs
+  // carry broker-generated client ids). Derived from broker order history each
+  // tick, so it is stateless and crash-safe.
+  const exitedTodayTickers = new Set(
+    todayOrders
+      .filter(
+        (o) =>
+          o.clientOrderId?.startsWith('exit-') ||
+          ((o.type === 'stop' || o.type === 'stop_limit') && (o.filledQty ?? 0) > 0),
+      )
+      .map((o) => o.ticker.toUpperCase()),
+  );
 
   // Quotes for thesis tickers plus every open position, so invalidation
   // monitoring covers positions whose thesis entry has since expired.
   const tickers = [
     ...new Set([
-      ...thesis.entries.map((e) => e.ticker.toUpperCase()),
+      ...activeEntries.map((e) => e.ticker.toUpperCase()),
       ...account.positions.map((p) => p.ticker.toUpperCase()),
     ]),
   ];
@@ -268,10 +306,16 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
     });
   }
   const quoteByTicker = new Map(fresh.map((q) => [q.ticker.toUpperCase(), q]));
-  const generatedAtMs = new Date(thesis.generatedAt).getTime();
-  const freshNews = allNews.filter((n) => new Date(n.created_at).getTime() > generatedAtMs);
-  const headlinesFor = (ticker: string): NewsItem[] =>
-    freshNews.filter((n) => n.symbols.some((s) => s.toUpperCase() === ticker.toUpperCase()));
+  // Headlines are cut per consumer: entries use the ACTIVE thesis's generation
+  // time; exit judging uses the generation time of the thesis the position was
+  // actually opened under (which may be days older — see exitEntryFor).
+  const headlinesFor = (ticker: string, sinceMs: number): NewsItem[] =>
+    allNews.filter(
+      (n) =>
+        new Date(n.created_at).getTime() > sinceMs &&
+        n.symbols.some((s) => s.toUpperCase() === ticker.toUpperCase()),
+    );
+  const activeThesisGeneratedMs = thesis ? new Date(thesis.generatedAt).getTime() : now.getTime();
 
   const openOrders = [...initialOpenOrders];
   const riskContext = (): RiskContext => ({
@@ -287,7 +331,7 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
   const summary = {
     stage: 'tick_summary',
     session,
-    thesisDate: thesis.date,
+    thesisDate: thesis?.date ?? null,
     halted: halt.halted,
     dailyPl,
     exitsPlaced: 0,
@@ -301,18 +345,44 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
     appendAudit({ kind: 'tick', data: { stage: 'skip', ticker, reason } });
   };
 
-  // Exit entries: active thesis first, then the most recent thesis file
-  // (expiry ignored) so positions opened on an expired thesis stay monitored.
-  const exitEntryFor = (ticker: string) => {
-    const active = thesis.entries.find((e) => e.ticker.toUpperCase() === ticker);
-    if (active) return active;
-    // A held position may have been opened under either thesis kind (e.g. an
-    // RTH entry now monitored after-hours), so search both.
-    for (const ymd of [todayYmd, yesterdayYmd]) {
+  // Exit entries: active thesis first, then walk back through recent thesis
+  // files (expiry ignored — a held position keeps its committed exit plan for
+  // as long as it is held, up to the lookback) so entry-carried invalidation /
+  // target / time-stop levels survive past two calendar days and a 'weeks'
+  // horizon time stop can actually fire. A held position may have been opened
+  // under either thesis kind (e.g. an RTH entry now monitored after-hours), so
+  // both are searched. A corrupt PAST file is skipped (audited inside
+  // loadThesisFile): exit monitoring degrades to stop-only rather than dying
+  // on history — only the ACTIVE thesis load keeps the abort-the-tick posture.
+  const thesisFileMemo = new Map<string, Thesis | null>();
+  const loadPastThesis = (ymd: string, kind: ThesisKind): Thesis | null => {
+    const key = `${ymd}|${kind}`;
+    const hit = thesisFileMemo.get(key);
+    if (hit !== undefined) return hit;
+    let past: Thesis | null;
+    try {
+      past = loadThesisFile(ymd, kind);
+    } catch {
+      past = null;
+    }
+    thesisFileMemo.set(key, past);
+    return past;
+  };
+  const exitEntryFor = (
+    ticker: string,
+  ): { entry: ThesisEntry; generatedAtMs: number } | undefined => {
+    const active = thesis?.entries.find((e) => e.ticker.toUpperCase() === ticker);
+    if (thesis && active) {
+      return { entry: active, generatedAtMs: new Date(thesis.generatedAt).getTime() };
+    }
+    for (let back = 0; back <= EXIT_ENTRY_LOOKBACK_DAYS; back++) {
+      const ymd = nowET(new Date(now.getTime() - back * DAY_MS)).ymd;
       for (const kind of ['offhours', 'rth'] as const) {
-        const past = loadThesisFile(ymd, kind);
+        const past = loadPastThesis(ymd, kind);
         const entry = past?.entries.find((e) => e.ticker.toUpperCase() === ticker);
-        if (entry) return entry;
+        if (past && entry) {
+          return { entry, generatedAtMs: new Date(past.generatedAt).getTime() };
+        }
       }
     }
     return undefined;
@@ -325,7 +395,8 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
   // Exits first: closing risk takes precedence over opening it.
   for (const position of account.positions) {
     const ticker = position.ticker.toUpperCase();
-    const entry = exitEntryFor(ticker);
+    const resolved = exitEntryFor(ticker);
+    const entry = resolved?.entry;
     const quote = quoteByTicker.get(ticker);
     // The hard per-position stop applies to EVERY open position — a loss limit
     // is risk management, not a judgment call. A position with no thesis entry
@@ -350,13 +421,20 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
     const mark = isLong ? quote.bid : quote.ask;
     let exitReasons: string[] | null = null;
     let trigger: string | undefined;
+    // Plan + peak from the engine path, reused below to attach a protective
+    // OCO leg to RTH exit orders. Left undefined on the legacy path so it
+    // stays byte-identical to the pre-engine executor.
+    let stopPlan: ExitPlan | undefined;
+    let stopPeak: number | undefined;
     if (cfg.exit_engine.enabled) {
       // Deterministic engine first (orphans run a stop-only plan — no thesis
       // horizon, no judge: today's protection exactly). The judge is a
       // qualitative overlay consulted only when the engine abstains.
       const plan = entry ? resolveExitPlan(entry, cfg) : resolveExitPlan(undefined, cfg);
       const peak = trackPositionPeak(ticker, position.side, mark, now.getTime());
-      const decision = evaluateExit({
+      stopPlan = plan;
+      stopPeak = peak.peak;
+      let decision = evaluateExit({
         direction: position.side,
         entryPrice: position.avgEntryPrice,
         entryTimeMs: peak.entryTimeMs,
@@ -365,13 +443,45 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
         nowMs: now.getTime(),
         plan,
       });
+      // Trail-family debounce (trail retrace + breakeven floor share the
+      // 'trail' trigger): require the trigger on confirm_ticks consecutive
+      // ticks, counting only ticks whose exit-side displayed size clears
+      // min_exit_top_size — one thin off-hours bid flicker must not liquidate
+      // a position into itself. hard_stop / invalidation_price / target /
+      // time_stop pass through undebounced (risk exits stay immediate).
+      // Defaults (1 tick, size 0) reproduce today's behavior exactly.
+      if (decision.exit && decision.trigger === 'trail') {
+        const dbg = cfg.exit_engine.trail_debounce;
+        const exitSideSize = isLong ? quote.bidSize : quote.askSize;
+        const sizeOk = dbg.min_exit_top_size <= 0 || exitSideSize >= dbg.min_exit_top_size;
+        const count = sizeOk ? (peak.trailPendingCount ?? 0) + 1 : (peak.trailPendingCount ?? 0);
+        if (!sizeOk || count < dbg.confirm_ticks) {
+          setTrailPending(ticker, count);
+          appendAudit({
+            kind: 'tick',
+            data: {
+              stage: 'trail_pending',
+              ticker,
+              count,
+              confirmTicks: dbg.confirm_ticks,
+              exitSideSize,
+              sizeOk,
+              reason: decision.reason,
+            },
+          });
+          decision = { exit: false };
+        }
+      } else if ((peak.trailPendingCount ?? 0) > 0) {
+        // trigger lapsed (or a higher-priority trigger fired): reset the count
+        setTrailPending(ticker, 0);
+      }
       if (decision.exit) {
         exitReasons = [decision.reason ?? decision.trigger ?? 'exit'];
         trigger = decision.trigger;
-      } else if (entry) {
+      } else if (entry && resolved) {
         const judged = await judgeTick(
           cfg,
-          { entry, quote, headlines: headlinesFor(ticker), position },
+          { entry, quote, headlines: headlinesFor(ticker, resolved.generatedAtMs), position },
           deps.llm,
         );
         if (judged.exitPosition) {
@@ -396,10 +506,10 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
           `stop: unrealized loss ${lossPct.toFixed(1)}% >= max_position_loss_pct ${cfg.max_position_loss_pct}%`,
         ];
         trigger = 'hard_stop';
-      } else if (entry) {
+      } else if (entry && resolved) {
         const decision = await judgeTick(
           cfg,
-          { entry, quote, headlines: headlinesFor(ticker), position },
+          { entry, quote, headlines: headlinesFor(ticker, resolved.generatedAtMs), position },
           deps.llm,
         );
         if (decision.exitPosition) {
@@ -427,22 +537,59 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
     for (let i = openOrders.length - 1; i >= 0; i--) {
       if (openOrders[i]!.ticker.toUpperCase() === ticker) openOrders.splice(i, 1);
     }
+    // marketable exit limit, cent-rounded toward the passive side
+    const exitLimit = isLong
+      ? Math.floor(quote.bid * 100) / 100
+      : Math.ceil(quote.ask * 100) / 100;
+    // RTH exits pair the limit with a protective stop (Alpaca OCO) so an
+    // unfilled exit limit never leaves the position stop-less until the next
+    // tick. Only attached when the stop is still strictly on the protective
+    // side of the limit: a triggered hard-stop/trail exit has already crossed
+    // its level (a stop there would be instantly invalid), so in practice
+    // judge- and target-triggered exits gain the leg. Engine path only;
+    // extended-hours stops do not execute, so off-hours exits stay plain.
+    let protectiveStop: number | undefined;
+    if (session === 'rth' && stopPlan !== undefined && stopPeak !== undefined) {
+      const level = desiredProtectiveStop({
+        side: position.side,
+        entryPrice: position.avgEntryPrice,
+        peak: stopPeak,
+        plan: stopPlan,
+      });
+      if (isLong ? level < exitLimit : level > exitLimit) protectiveStop = level;
+    }
     const order: ProposedOrder = {
       ticker: position.ticker,
       side: isLong ? 'sell' : 'buy',
       qty: Math.abs(position.qty),
-      // marketable exit limit, cent-rounded toward the passive side
-      limitPrice: isLong
-        ? Math.floor(quote.bid * 100) / 100
-        : Math.ceil(quote.ask * 100) / 100,
+      limitPrice: exitLimit,
       intent: 'exit',
       reason: exitReasons.join('; ') || 'invalidation triggered',
       extendedHours,
+      ...(protectiveStop !== undefined ? { protectiveStop } : {}),
     };
     appendAudit({ kind: 'proposed_order', data: order });
     const risk = riskCheck(order, riskContext());
     if (risk.allowed) {
-      const placed = await broker.placeLimitOrder(order);
+      let placed;
+      try {
+        placed = await broker.placeLimitOrder(order);
+      } catch (err) {
+        if (order.protectiveStop === undefined) throw err;
+        // OCO rejected (e.g. leg validation): a plain exit beats no exit.
+        // Downgrade to exactly what the pre-OCO executor placed and audit.
+        appendAudit({
+          kind: 'error',
+          data: {
+            stage: 'oco_exit_fallback',
+            ticker,
+            message: err instanceof Error ? err.message : String(err),
+          },
+        });
+        const plain: ProposedOrder = { ...order };
+        delete plain.protectiveStop;
+        placed = await broker.placeLimitOrder(plain);
+      }
       openOrders.push(placed);
       appendAudit({ kind: 'order_placed', data: placed });
       summary.exitsPlaced++;
@@ -471,7 +618,7 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
       if (!quote) continue; // no fresh mark; the GTC stop already resting still protects
       const isLong = position.side === 'long';
       const mark = isLong ? quote.bid : quote.ask;
-      const entry = exitEntryFor(ticker);
+      const entry = exitEntryFor(ticker)?.entry;
       const plan = entry ? resolveExitPlan(entry, cfg) : resolveExitPlan(undefined, cfg);
       // Idempotent within the tick: the exit loop already ratcheted the peak.
       const peak = trackPositionPeak(ticker, position.side, mark, now.getTime());
@@ -535,7 +682,7 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
   // ALL new entries this tick, leaving open positions monitored.
   const entryMinutes = nowET(now).minutes;
   const entriesAllowedByTiming = entryTimingAllowed(session, entryMinutes, cfg);
-  if (!entriesAllowedByTiming && thesis.entries.length > 0) {
+  if (!entriesAllowedByTiming && activeEntries.length > 0) {
     appendAudit({
       kind: 'tick',
       data: {
@@ -543,7 +690,7 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
         session,
         minutes: entryMinutes,
         action: 'skip_entries',
-        count: thesis.entries.length,
+        count: activeEntries.length,
       },
     });
   }
@@ -553,7 +700,7 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
   // print; the deterministic calendar keeps the executor from opening risk
   // into a known binary event. Exits above already ran ungated.
   const eventBlock = activeEventBlackout(nowET(now), cfg);
-  if (eventBlock && entriesAllowedByTiming && thesis.entries.length > 0) {
+  if (eventBlock && entriesAllowedByTiming && activeEntries.length > 0) {
     appendAudit({
       kind: 'tick',
       data: {
@@ -562,12 +709,12 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
         label: eventBlock.label,
         eventHm: eventBlock.hm,
         action: 'skip_entries',
-        count: thesis.entries.length,
+        count: activeEntries.length,
       },
     });
   }
 
-  for (const entry of thesis.entries) {
+  for (const entry of activeEntries) {
     if (!entriesAllowedByTiming || eventBlock) break; // timing/event blackout: no new entries this tick
     const ticker = entry.ticker.toUpperCase();
     if (account.positions.some((p) => p.ticker.toUpperCase() === ticker)) {
@@ -576,6 +723,15 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
     }
     if (openOrders.some((o) => o.ticker.toUpperCase() === ticker)) {
       skip(ticker, 'open order exists');
+      continue;
+    }
+    // Stop-out cooldown: a name exited or stopped today is done for the day —
+    // the band + judge alone would happily re-buy it 15 minutes after a stop.
+    if (
+      cfg.entry_cooldown_after_exit &&
+      (exitedTodayTickers.has(ticker) || exitOrderedTickers.has(ticker))
+    ) {
+      skip(ticker, 're-entry cooldown: exited today');
       continue;
     }
     const quote = quoteByTicker.get(ticker);
@@ -607,7 +763,11 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
         continue;
       }
     }
-    const decision = await judgeTick(cfg, { entry, quote, headlines: headlinesFor(ticker) }, deps.llm);
+    const decision = await judgeTick(
+      cfg,
+      { entry, quote, headlines: headlinesFor(ticker, activeThesisGeneratedMs) },
+      deps.llm,
+    );
     if (!decision.proceed) {
       skip(ticker, `judge declined: ${decision.reasons.join('; ') || 'no reason given'}`);
       continue;
