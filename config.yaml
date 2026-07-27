@@ -90,12 +90,14 @@ max_position_loss_pct: 8    # per-position hard stop, checked each tick
 exit_engine:
   enabled: true
   # Default trailing policy for EVERY position (orphans included; an
-  # entry-carried LLM trail overrides): arm once unrealized gain >= 5%,
-  # ratchet the floor to breakeven, then trail 4% off the favorable peak.
+  # entry-carried LLM trail overrides). Two tiers by peak unrealized gain:
+  # >= 1% ratchets the stop to breakeven; >= 5% trails 4% off the favorable
+  # peak (never below breakeven).
   trail:
     activate_pct: 5
     trail_pct: 4
     breakeven_floor: true
+    breakeven_at_pct: 1
   # Converge a resting GTC broker stop to the trail floor every tick so the
   # protection survives an engine outage. Never enable in backtest configs.
   native_stop_ratchet:

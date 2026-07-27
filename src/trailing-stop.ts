@@ -55,13 +55,19 @@ export function desiredProtectiveStop(ctx: StopLevelContext): number {
   const trail = plan.trail;
   if (!trail || peak <= 0 || entryPrice <= 0) return round2(base);
   const gainPct = ((isLong ? peak - entryPrice : entryPrice - peak) / entryPrice) * 100;
-  if (gainPct < trail.activatePct - EPS) return round2(base);
-  const trailLevel = isLong ? peak * (1 - trail.trailPct / 100) : peak * (1 + trail.trailPct / 100);
-  const floor = trail.floorAtEntry
-    ? isLong
-      ? Math.max(entryPrice, trailLevel)
-      : Math.min(entryPrice, trailLevel)
-    : trailLevel;
+  // Two-tier arming: breakeven floor first (breakevenAtPct, or the trail's
+  // own threshold via floorAtEntry), HWM trail at activatePct.
+  const beArmPct = trail.breakevenAtPct ?? (trail.floorAtEntry ? trail.activatePct : undefined);
+  const floors: number[] = [];
+  if (beArmPct !== undefined && gainPct >= beArmPct - EPS) floors.push(entryPrice);
+  if (gainPct >= trail.activatePct - EPS) {
+    const trailLevel = isLong
+      ? peak * (1 - trail.trailPct / 100)
+      : peak * (1 + trail.trailPct / 100);
+    floors.push(trailLevel);
+  }
+  if (floors.length === 0) return round2(base);
+  const floor = isLong ? Math.max(...floors) : Math.min(...floors);
   return round2(isLong ? Math.max(base, floor) : Math.min(base, floor));
 }
 

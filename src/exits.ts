@@ -91,15 +91,22 @@ export function evaluateExit(ctx: ExitContext): ExitDecision {
           reason: `trail: retrace ${retracePct.toFixed(1)}% from peak ${ctx.peakFavorablePrice} >= ${plan.trail.trailPct}%`,
         };
       }
-      // Armed winners never round-trip into losers: a full retrace to entry
-      // exits even when the peak-relative retrace is still inside trailPct.
-      if (plan.trail.floorAtEntry && (isLong ? markPrice <= entryPrice : markPrice >= entryPrice)) {
-        return {
-          exit: true,
-          trigger: 'trail',
-          reason: `trail: breakeven floor — armed at +${plan.trail.activatePct}% (peak ${ctx.peakFavorablePrice}), mark ${markPrice} back through entry ${entryPrice}`,
-        };
-      }
+    }
+    // Breakeven floor — armed winners never round-trip into losers. Two-tier
+    // when breakevenAtPct is set (arms below activatePct); otherwise tied to
+    // the trail's own arming via floorAtEntry.
+    const beArmPct =
+      plan.trail.breakevenAtPct ?? (plan.trail.floorAtEntry ? plan.trail.activatePct : undefined);
+    if (
+      beArmPct !== undefined &&
+      gainPct >= beArmPct - EPS &&
+      (isLong ? markPrice <= entryPrice : markPrice >= entryPrice)
+    ) {
+      return {
+        exit: true,
+        trigger: 'trail',
+        reason: `trail: breakeven floor — armed at +${beArmPct}% (peak ${ctx.peakFavorablePrice}), mark ${markPrice} back through entry ${entryPrice}`,
+      };
     }
   }
 
@@ -138,7 +145,12 @@ export function resolveExitPlan(
   // trail 4% off the favorable peak). An entry-carried trail always wins.
   const t = cfg.exit_engine.trail;
   const defaultTrail = t
-    ? { activatePct: t.activate_pct, trailPct: t.trail_pct, floorAtEntry: t.breakeven_floor }
+    ? {
+        activatePct: t.activate_pct,
+        trailPct: t.trail_pct,
+        floorAtEntry: t.breakeven_floor,
+        ...(t.breakeven_at_pct !== undefined ? { breakevenAtPct: t.breakeven_at_pct } : {}),
+      }
     : undefined;
   if (!entry) {
     return {

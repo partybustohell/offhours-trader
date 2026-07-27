@@ -465,3 +465,73 @@ describe('evaluateExit: trail breakeven floor', () => {
     expect(d.reason).toContain('breakeven');
   });
 });
+
+describe('evaluateExit: two-tier breakeven arming (breakevenAtPct)', () => {
+  // Policy v2: breakeven floor arms at +1% peak gain; the HWM trail still
+  // arms at +5%. Between the tiers only the breakeven floor is live.
+  const tierPlan = {
+    hardStopPct: 8,
+    trail: { activatePct: 5, trailPct: 4, floorAtEntry: true, breakevenAtPct: 1 },
+  };
+
+  it('long: peaked +1.5%, mark back at entry exits on the breakeven floor', () => {
+    const d = evaluateExit({
+      ...base,
+      plan: tierPlan,
+      peakFavorablePrice: 101.5,
+      markPrice: 100,
+    });
+    expect(d.exit).toBe(true);
+    expect(d.trigger).toBe('trail');
+    expect(d.reason).toContain('breakeven');
+  });
+
+  it('long: peaked only +0.9%, mark at entry holds (not armed)', () => {
+    const d = evaluateExit({
+      ...base,
+      plan: tierPlan,
+      peakFavorablePrice: 100.9,
+      markPrice: 100,
+    });
+    expect(d.exit).toBe(false);
+  });
+
+  it('long: peaked +1.5% and above entry holds — no HWM trail below the +5% tier', () => {
+    // retrace from 101.5 to 100.01 is 1.47%... would not trip trailPct anyway;
+    // use a big retrace that WOULD trip trailPct to prove the trail is dark:
+    const d = evaluateExit({
+      ...base,
+      plan: { hardStopPct: 50, trail: { activatePct: 5, trailPct: 1, breakevenAtPct: 1 } },
+      peakFavorablePrice: 103, // +3%: breakeven armed, trail NOT armed
+      markPrice: 100.5, // retrace 2.4% >= trailPct 1 — but trail tier not armed
+    });
+    expect(d.exit).toBe(false);
+  });
+
+  it('short: trough at -1.5%, mark back at entry exits on the breakeven floor', () => {
+    const d = evaluateExit({
+      ...base,
+      direction: 'short',
+      plan: tierPlan,
+      peakFavorablePrice: 98.5,
+      markPrice: 100,
+    });
+    expect(d.exit).toBe(true);
+    expect(d.trigger).toBe('trail');
+    expect(d.reason).toContain('breakeven');
+  });
+
+  it('resolveExitPlan maps config breakeven_at_pct through to the plan', () => {
+    const c = ConfigSchema.parse({
+      exit_engine: {
+        trail: { activate_pct: 5, trail_pct: 4, breakeven_at_pct: 1 },
+      },
+    });
+    expect(resolveExitPlan(undefined, c).trail).toEqual({
+      activatePct: 5,
+      trailPct: 4,
+      floorAtEntry: true,
+      breakevenAtPct: 1,
+    });
+  });
+});

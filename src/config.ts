@@ -323,6 +323,9 @@ export const ConfigSchema = z.object({
           // Once armed, also exit on a full retrace to entry — guards configs
           // where trail_pct exceeds activate_pct.
           breakeven_floor: z.boolean().default(true),
+          // Two-tier arming: breakeven floor arms at this lower gain %
+          // (before activate_pct arms the HWM trail).
+          breakeven_at_pct: z.number().positive().optional(),
         })
         .optional(),
       // Maintain a resting GTC broker stop per position at the trail floor

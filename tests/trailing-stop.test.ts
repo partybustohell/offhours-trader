@@ -133,3 +133,39 @@ describe('planStopAction', () => {
     expect(planStopAction({ ...armed, entryPrice: 0 })).toEqual({ action: 'none' });
   });
 });
+
+describe('desiredProtectiveStop: two-tier breakeven arming', () => {
+  const tierPlan: ExitPlan = {
+    hardStopPct: 8,
+    trail: { activatePct: 5, trailPct: 4, floorAtEntry: true, breakevenAtPct: 1 },
+  };
+  const base = { side: 'long' as const, entryPrice: 100, plan: tierPlan };
+
+  it('long: peak +1% ratchets the stop to breakeven', () => {
+    expect(desiredProtectiveStop({ ...base, peak: 101 })).toBe(100);
+  });
+
+  it('long: peak +4.9% stays at breakeven (HWM trail not yet armed)', () => {
+    expect(desiredProtectiveStop({ ...base, peak: 104.9 })).toBe(100);
+  });
+
+  it('long: peak +0.9% keeps the hard stop', () => {
+    expect(desiredProtectiveStop({ ...base, peak: 100.9 })).toBe(92);
+  });
+
+  it('long: peak +5% switches to the HWM trail above breakeven', () => {
+    expect(desiredProtectiveStop({ ...base, peak: 105 })).toBe(100.8);
+  });
+
+  it('short: trough -1% ratchets the buy stop to breakeven', () => {
+    expect(
+      desiredProtectiveStop({ side: 'short', entryPrice: 100, plan: tierPlan, peak: 99 }),
+    ).toBe(100);
+  });
+
+  it('short: trough -0.9% keeps the hard stop', () => {
+    expect(
+      desiredProtectiveStop({ side: 'short', entryPrice: 100, plan: tierPlan, peak: 99.1 }),
+    ).toBe(108);
+  });
+});

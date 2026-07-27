@@ -78,6 +78,9 @@ export interface ExitPlan {
     trailPct: number;
     /** Once armed, also exit if the mark retraces all the way to entry. */
     floorAtEntry?: boolean;
+    /** Two-tier arming: the breakeven floor arms at this LOWER peak gain %
+     *  (e.g. 1), before the HWM trail arms at activatePct. */
+    breakevenAtPct?: number;
   };
   /** Exit if unresolved this many hours after entry (first-seen fallback). */
   timeStopHours?: number;
