@@ -154,3 +154,28 @@ export function ymdRange(now: Date, daysAhead: number): string[] {
   for (let d = 0; d <= daysAhead; d++) out.push(nowET(new Date(now.getTime() + d * DAY_MS)).ymd);
   return out;
 }
+
+/**
+ * Whether a scheduled report's PRINT has already happened relative to the ET
+ * clock. The own-earnings guard exists to stop holding INTO a binary print —
+ * once the print is out, the post-print reaction entry is exactly the
+ * catalyst play the earnings scan was built for (registry row
+ * earnings-scan-2026-07-27) and must not be blocked. Pure.
+ *   - a past ymd is past; a future ymd is not;
+ *   - today + 'pre'  -> past once the open has arrived (09:30 ET);
+ *   - today + 'post' -> past from 16:30 ET (the bulk of post-close prints are
+ *     out by then, and the 16:35 pipeline only forms beat/miss theses on
+ *     releases it has actually read);
+ *   - today + 'unknown' timing -> never past (conservative: blocked all day).
+ */
+export function isReportPast(
+  report: { ymd: string; time: EarningsEntry['time'] },
+  todayYmd: string,
+  minutesET: number,
+): boolean {
+  if (report.ymd < todayYmd) return true;
+  if (report.ymd > todayYmd) return false;
+  if (report.time === 'pre') return minutesET >= 570; // 09:30 ET
+  if (report.time === 'post') return minutesET >= 990; // 16:30 ET
+  return false;
+}

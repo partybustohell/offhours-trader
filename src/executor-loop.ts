@@ -17,7 +17,7 @@ import { riskCheck, type RiskContext } from './risk.js';
 import type { BrokerClient } from './broker/client.js';
 import { AlpacaBroker } from './broker/client.js';
 import { AlpacaMarketData, type NewsItem } from './broker/marketdata.js';
-import { earningsWithin, loadEarningsCalendar, ymdRange, type EarningsByDate } from './broker/earnings.js';
+import { earningsWithin, isReportPast, loadEarningsCalendar, ymdRange, type EarningsByDate } from './broker/earnings.js';
 import { judgeTick } from './agents/judge.js';
 import type { LlmClient } from './agents/llm.js';
 
@@ -659,7 +659,7 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
     for (const position of account.positions) {
       const ticker = position.ticker.toUpperCase();
       const report = earningsWithin(earningsDays, ticker, earningsYmds, 1);
-      if (report) {
+      if (report && !isReportPast(report, earningsYmds[0]!, nowET(now).minutes)) {
         appendAudit({
           kind: 'tick',
           data: {
@@ -803,6 +803,8 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
       continue;
     }
     // Own-earnings guard (entries only): never OPEN into a scheduled report.
+    // A print that is already OUT does not block — the post-print reaction
+    // entry is the registered catalyst play, not binary-event risk.
     if (cfg.execution.earnings_guard.enabled) {
       const report = earningsWithin(
         earningsDays,
@@ -810,7 +812,7 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
         earningsYmds,
         cfg.execution.earnings_guard.block_days_ahead,
       );
-      if (report) {
+      if (report && !isReportPast(report, earningsYmds[0]!, nowET(now).minutes)) {
         skip(ticker, `own-earnings guard: reports ${report.ymd} (${report.time})`);
         continue;
       }

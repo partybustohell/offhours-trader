@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { earningsWithin, parseNasdaqRows, ymdRange, type EarningsByDate } from '../src/broker/earnings.js';
+import { earningsWithin, isReportPast, parseNasdaqRows, ymdRange, type EarningsByDate } from '../src/broker/earnings.js';
 
 describe('parseNasdaqRows', () => {
   it('maps the Nasdaq shape and normalizes report timing', () => {
@@ -44,6 +44,27 @@ describe('earningsWithin', () => {
     expect(earningsWithin(days, 'BBB', ymds, 1)).toBeNull(); // reports on day 2, window is 1
     expect(earningsWithin(days, 'CCC', ymds, 2)).toBeNull(); // never reports
     expect(earningsWithin({}, 'AAA', ymds, 2)).toBeNull(); // degraded calendar -> admit
+  });
+});
+
+describe('isReportPast (post-print reaction entries must not be blocked)', () => {
+  const today = '2026-07-27';
+
+  it('future days always block; past days never do', () => {
+    expect(isReportPast({ ymd: '2026-07-28', time: 'pre' }, today, 1200)).toBe(false);
+    expect(isReportPast({ ymd: '2026-07-26', time: 'unknown' }, today, 0)).toBe(true);
+  });
+
+  it("today's post-close print is past from 16:30 ET, not before", () => {
+    expect(isReportPast({ ymd: today, time: 'post' }, today, 989)).toBe(false); // 16:29
+    expect(isReportPast({ ymd: today, time: 'post' }, today, 990)).toBe(true); // 16:30
+    expect(isReportPast({ ymd: today, time: 'post' }, today, 540)).toBe(false); // 09:00 premarket: still ahead
+  });
+
+  it("today's pre-open print is past from the open; unknown timing blocks all day", () => {
+    expect(isReportPast({ ymd: today, time: 'pre' }, today, 569)).toBe(false);
+    expect(isReportPast({ ymd: today, time: 'pre' }, today, 570)).toBe(true);
+    expect(isReportPast({ ymd: today, time: 'unknown' }, today, 1199)).toBe(false);
   });
 });
 
