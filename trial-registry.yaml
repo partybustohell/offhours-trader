@@ -421,6 +421,85 @@ trials:
       THEN a paired backtest cell registered against this flag, THEN the
       config flip. Exit-shape change: measured like exit-engine-v1 (risk
       shape, not edge).
+  - id: edgar-content-2026-07-28
+    date: "2026-07-28"
+    flag: universe.edgar_content
+    type: alpha
+    status: shipped-flag-off
+    horizonDays: 180
+    targetActiveN: 50
+    mechanism:
+      counterparty: >-
+        Keyword scanners and holders who reprice a filing from its headline
+        number alone, without reading the guidance and segment language in
+        the primary 8-K / press-release text.
+      whyTheyPay: >-
+        The tradable information in a filing is often in the prose — guidance
+        direction, one-off vs repeatable items, covenant or dilution language
+        — which diffuses over hours-to-days because most fast money reads the
+        structured fields and vendor summaries, not the primary document.
+      friction: >-
+        Reading primary text at scale is exactly what keyword pipelines do
+        not do and human analysts cannot do fast across the whole tape, and
+        the effect concentrates in the thinly covered names where nobody is
+        paid to read the filing at all.
+    notes: >-
+      Information-provision machinery (same family as news_content /
+      earnings-scan-2026-07-27): each candidate's recent 8-K or EX-99 press
+      release, HTML-stripped, straight from SEC EDGAR into the verdict-round
+      payload as primaryFiling. The panel still decides; no parameters to
+      fit. Fail-open per ticker; sequential fetches under SEC fair-access
+      limits; ticker->CIK map disk-cached 7 days. SHIPS OFF: enabling changes
+      verdict prompt bytes (backtest LLM caches re-run) and is a registry
+      decision — flip only with a status update here, ideally at a soak-window
+      boundary so the OOS sample stays homogeneous. Evaluate like
+      earnings-scan: outcomes of entries whose verdicts cited filing text vs
+      not, once >= 50 OOS trades exist.
+  - id: model-bridge-2026-07-28
+    date: "2026-07-28"
+    flag: model.shadow_analysts
+    type: guardrail
+    status: shipped-flag-off
+    notes: >-
+      Model-deprecation bridge. Rule 1 (soak-reset-2026-07-27) freezes the
+      analyst/executor/synthesizer model IDs and resets the OOS closed-trade
+      counter on ANY change — but the frozen IDs are vendor-controlled and
+      WILL eventually be deprecated, so a hard reset is guaranteed unless
+      continuity evidence exists. Machinery: set model.shadow_analysts to the
+      candidate model and the pipeline re-runs the verdict round on IDENTICAL
+      inputs each pass, writes verdicts-shadow-<ymd>.json, and audits
+      (analyst,ticker)-paired direction agreement + mean |conviction delta|.
+      Nothing shadow is ever traded; a shadow failure never blocks a thesis;
+      cost is one extra verdict round per pass while enabled. PRE-STATED
+      PROCEDURE: (a) enable the shadow >= 15 trading days before any swap;
+      (b) at swap time, a registry row must record the measured agreement; (c)
+      whether measured agreement justifies carrying the OOS counter forward
+      (vs the full rule-1 reset) is a NEW registry decision made on that
+      evidence — this row authorizes the measurement, not the continuity
+      claim. Rule 1 remains in force: the bridge is evidence for amending it,
+      never an override.
+  - id: passive-exits-2026-07-28
+    date: "2026-07-28"
+    flag: execution.exit_passive
+    type: guardrail
+    status: shipped-flag-off
+    notes: >-
+      Passive-first exits for NON-RISK triggers (target / time_stop / judge):
+      the first exit attempt rests inside the spread at
+      execution.exit_passive.aggressiveness (0.5 = mid) instead of crossing;
+      if the trigger re-fires on a later tick with the prior exit order still
+      resting unfilled, the attempt escalates to marketable. hard_stop /
+      invalidation_price / trail ALWAYS cross (urgency beats cost). Symmetric
+      to the 2026-07-27 entry_aggressiveness change: cost control on our own
+      flow, not an edge hypothesis — the same "counterparty is the passive
+      side of the spread we stop paying" mechanism as
+      exec-entry-aggressiveness-2026-07-27. Trade-off is fill risk bounded to
+      ONE tick (~15 min) of delay before escalation. ENABLE CONDITION
+      (pre-stated): the feedback report's executionShortfall (shipped
+      2026-07-28) must show mean exit-side shortfall >= 15 bps over >= 20
+      non-risk-trigger exit fills, THEN the flag flips with a registry status
+      update. Measured like the other execution-hygiene rows: realized
+      exit-side shortfall + escalation rate, not P&L.
   - id: soak-gate-concretization-2026-07-27
     date: "2026-07-27"
     flag: soak-gate

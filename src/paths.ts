@@ -10,6 +10,9 @@ export function ensureOut(): void {
 
 export const candidatesPath = (ymd: string) => path.join(OUT_DIR, `candidates-${ymd}.json`);
 export const verdictsPath = (ymd: string) => path.join(OUT_DIR, `verdicts-${ymd}.json`);
+/** Shadow-MODEL verdict round (model.shadow_analysts, deprecation bridge):
+ *  same inputs as the primary round, never traded, kept for agreement stats. */
+export const verdictsShadowPath = (ymd: string) => path.join(OUT_DIR, `verdicts-shadow-${ymd}.json`);
 // Off-hours keeps the bare name (backward compatible); RTH is suffixed so the
 // morning and evening theses coexist for the same date.
 export const thesisPath = (ymd: string, kind: 'offhours' | 'rth' = 'offhours') =>
@@ -29,6 +32,8 @@ export const judgeCachePath = () => path.join(OUT_DIR, 'judge-cache.json');
 export const judgeStatsPath = () => path.join(OUT_DIR, 'judge-stats.json');
 /** Earnings-calendar disk cache ({ fetchedAtMs, days }); 12h TTL, fail-open. */
 export const earningsCachePath = () => path.join(OUT_DIR, 'earnings-cache.json');
+/** SEC EDGAR ticker->CIK map cache ({ fetchedAtMs, byTicker }); 7d TTL. */
+export const edgarCikCachePath = () => path.join(OUT_DIR, 'edgar-cik-cache.json');
 
 export function writeJsonAtomic(file: string, data: unknown): void {
   ensureOut();

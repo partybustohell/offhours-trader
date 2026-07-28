@@ -31,12 +31,14 @@ describe('ConfigSchema defaults', () => {
     expect(cfg.universe).toEqual({
       nominations_per_agent: 5,
       max_candidates: 15,
+      verdict_chunk_size: 8,
       min_price: 5,
       min_avg_dollar_volume: 20_000_000,
       exclude: [],
       // catalyst scan + primary-text defaults: off (backtest parity)
       earnings_scan: { enabled: false },
       news_content: { enabled: false, max_chars: 1500 },
+      edgar_content: { enabled: false, lookback_days: 2, max_chars: 4000 },
     });
     expect(cfg.sessions).toEqual({ premarket: true, afterhours: true, regularhours: false });
     expect(cfg.agent_weights).toEqual({
@@ -334,6 +336,8 @@ describe('exit_engine config', () => {
       native_stop_ratchet: { enabled: false },
       // Debounce defaults are byte-identical to no debounce (1 tick, size 0).
       trail_debounce: { confirm_ticks: 1, min_exit_top_size: 0 },
+      // Peak-ratchet data-quality gate ships inert (size 0 = no gate).
+      peak_sanity: { min_top_size: 0 },
       // Tier-3 machinery ships dark; enable condition pre-registered.
       scale_out: { enabled: false, target_fraction: 0.5 },
     });

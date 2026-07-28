@@ -98,25 +98,57 @@ const EXIT_ENTRY_LOOKBACK_DAYS = 14;
  */
 /**
  * Split quotes into fresh vs stale relative to the tick clock. A quote with a
- * missing or unparseable timestamp is stale by definition (fail closed).
+ * missing or unparseable timestamp is stale by definition (fail closed). A
+ * CROSSED book (both sides present, bid > ask) is an inconsistent snapshot —
+ * junk data, not a price — and is dropped the same way: acting on it can
+ * force-liquidate a healthy position (spurious hard stop on the junk bid) or
+ * permanently poison the trailing peak, which max-ratchets and never decays.
+ * One-sided books (a zero bid or ask) pass through: the existing per-path
+ * guards already handle missing sides.
  */
 export function partitionFreshQuotes(
   quotes: QuoteSnapshot[],
   nowMs: number,
   maxAgeSec: number,
-): { fresh: QuoteSnapshot[]; stale: number } {
+): { fresh: QuoteSnapshot[]; stale: number; crossed: number } {
   const maxAgeMs = maxAgeSec * 1000;
   const fresh: QuoteSnapshot[] = [];
   let stale = 0;
+  let crossed = 0;
   for (const q of quotes) {
     const asOfMs = Date.parse(q.asOf);
-    if (Number.isFinite(asOfMs) && nowMs - asOfMs <= maxAgeMs && nowMs - asOfMs >= -maxAgeMs) {
-      fresh.push(q);
-    } else {
+    if (!Number.isFinite(asOfMs) || nowMs - asOfMs > maxAgeMs || nowMs - asOfMs < -maxAgeMs) {
       stale++;
+      continue;
     }
+    if (q.bid > 0 && q.ask > 0 && q.bid > q.ask) {
+      crossed++;
+      continue;
+    }
+    fresh.push(q);
   }
-  return { fresh, stale };
+  return { fresh, stale, crossed };
+}
+
+/**
+ * The mark a quote may ratchet the trailing PEAK with, or 0 when the quote is
+ * not peak-eligible (trackPositionPeak's mark<=0 guard then keeps the last
+ * good record without persisting garbage). Peak state is write-once in the
+ * favorable direction — it never decays — so it gets a stricter gate than the
+ * instantaneous exit checks: the displayed size behind the mark must clear
+ * min_top_size (0 = no gate, today's behavior). Crossed books never reach
+ * here (dropped in partitionFreshQuotes). Pure.
+ */
+export function peakEligibleMark(
+  quote: Pick<QuoteSnapshot, 'bid' | 'ask' | 'bidSize' | 'askSize'>,
+  side: 'long' | 'short',
+  minTopSize: number,
+): number {
+  const isLong = side === 'long';
+  const mark = isLong ? quote.bid : quote.ask;
+  const size = isLong ? quote.bidSize : quote.askSize;
+  if (minTopSize > 0 && size < minTopSize) return 0;
+  return mark;
 }
 
 export function seedDeployedTodayUsd(todayOrders: { clientOrderId?: string; status: string; qty: number; filledQty?: number; limitPrice: number }[]): number {
@@ -148,6 +180,61 @@ export function entryLimitPrice(
   }
   const target = a >= 1 ? quote.bid : quote.ask - a * (quote.ask - quote.bid);
   return Math.ceil(Math.max(target, band.low) * 100) / 100;
+}
+
+/**
+ * Per-symbol news fan-out: one bounded request per ticker, flattened and
+ * deduplicated, so a busy mega-cap cannot crowd every other name out of a
+ * shared top-N pull (the old single getNews(50, allTickers) call gave a
+ * power-law news day to one symbol and zero headlines to the rest). A failed
+ * symbol degrades to no headlines for that symbol — strictly more robust than
+ * before, when one news-API failure killed the whole tick, exits included.
+ */
+export async function fetchPerSymbolNews(
+  md: Pick<AlpacaMarketData, 'getNews'>,
+  tickers: string[],
+  perSymbol = 10,
+): Promise<{ items: NewsItem[]; failed: string[] }> {
+  const failed: string[] = [];
+  const lists = await Promise.all(
+    tickers.map((t) =>
+      md.getNews(perSymbol, [t]).catch((): NewsItem[] => {
+        failed.push(t);
+        return [];
+      }),
+    ),
+  );
+  const seen = new Set<string>();
+  const items: NewsItem[] = [];
+  for (const item of lists.flat()) {
+    const key = `${item.created_at}|${item.headline}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    items.push(item);
+  }
+  return { items, failed };
+}
+
+/**
+ * Limit price for a CLOSING order. aggressiveness 1 = marketable at the touch,
+ * cent-rounded toward the passive side — byte-identical to the historical exit
+ * (floor(bid) for sells, ceil(ask) for buy-to-cover). <1 rests inside the
+ * spread by that fraction of the way toward the touch (0.5 = mid, 0 = fully
+ * passive at the far side), rounded toward the PASSIVE side so rounding never
+ * crosses more than intended. Pure.
+ */
+export function exitLimitPrice(
+  side: 'sell' | 'buy',
+  quote: { bid: number; ask: number },
+  aggressiveness = 1,
+): number {
+  const a = Math.max(0, Math.min(1, aggressiveness));
+  if (side === 'sell') {
+    if (a >= 1) return Math.floor(quote.bid * 100) / 100;
+    return Math.ceil((quote.ask - a * (quote.ask - quote.bid)) * 100) / 100;
+  }
+  if (a >= 1) return Math.ceil(quote.ask * 100) / 100;
+  return Math.floor((quote.bid + a * (quote.ask - quote.bid)) * 100) / 100;
 }
 
 /**
@@ -313,19 +400,33 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
       ...account.positions.map((p) => p.ticker.toUpperCase()),
     ]),
   ];
-  const [quotes, allNews] = await Promise.all([
+  const [quotes, newsResult] = await Promise.all([
     tickers.length > 0 ? md.getLatestQuotes(tickers) : Promise.resolve([] as QuoteSnapshot[]),
-    tickers.length > 0 ? md.getNews(50, tickers) : Promise.resolve([] as NewsItem[]),
+    tickers.length > 0
+      ? fetchPerSymbolNews(md, tickers)
+      : Promise.resolve({ items: [] as NewsItem[], failed: [] as string[] }),
   ]);
+  const allNews = newsResult.items;
+  if (newsResult.failed.length > 0) {
+    appendAudit({
+      kind: 'tick',
+      data: {
+        stage: 'news_degraded',
+        session,
+        symbols: newsResult.failed,
+        note: 'no headlines for those symbols this tick; judge/exit checks proceed on thesis alone',
+      },
+    });
+  }
   // Staleness guard (fail closed): drop any quote older than max_quote_age_sec
   // relative to the tick clock. Dropped quotes fall through the existing "no
   // quote" skip, so the executor never trades on a stale book — this is what
   // makes the free IEX feed SAFE to run in the deep off-hours it cannot see.
-  const { fresh, stale } = partitionFreshQuotes(quotes, now.getTime(), gate.maxQuoteAgeSec);
-  if (stale > 0) {
+  const { fresh, stale, crossed } = partitionFreshQuotes(quotes, now.getTime(), gate.maxQuoteAgeSec);
+  if (stale > 0 || crossed > 0) {
     appendAudit({
       kind: 'tick',
-      data: { stage: 'stale_quotes', session, dropped: stale, feed: cfg.data_feed },
+      data: { stage: 'stale_quotes', session, dropped: stale, crossed, feed: cfg.data_feed },
     });
   }
   const quoteByTicker = new Map(fresh.map((q) => [q.ticker.toUpperCase(), q]));
@@ -457,7 +558,14 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
       // horizon, no judge: today's protection exactly). The judge is a
       // qualitative overlay consulted only when the engine abstains.
       const plan = entry ? resolveExitPlan(entry, cfg) : resolveExitPlan(undefined, cfg);
-      const peak = trackPositionPeak(ticker, position.side, mark, now.getTime());
+      // Peak ratchet takes the sanity-gated mark; the instantaneous exit
+      // checks below keep the raw mark (risk exits stay immediate).
+      const peak = trackPositionPeak(
+        ticker,
+        position.side,
+        peakEligibleMark(quote, position.side, cfg.exit_engine.peak_sanity.min_top_size),
+        now.getTime(),
+      );
       stopPlan = plan;
       stopPeak = peak.peak;
       let decision = evaluateExit({
@@ -559,6 +667,20 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
     const exitQty =
       exitFraction < 1 ? Math.min(absQty, Math.max(1, Math.floor(absQty * exitFraction))) : absQty;
     const isFullExit = exitQty >= absQty;
+    // Passive-first exits (execution.exit_passive, flag-off): a NON-RISK
+    // trigger's first attempt rests inside the spread; when the trigger
+    // re-fires on a later tick with a prior exit order still resting
+    // (unfilled), it escalates to marketable. Risk triggers always cross.
+    // The resting-exit check must read openOrders BEFORE the cancel below
+    // wipes this ticker's orders from the local view.
+    const passiveCfg = cfg.execution.exit_passive;
+    const riskTrigger =
+      trigger === 'hard_stop' || trigger === 'invalidation_price' || trigger === 'trail';
+    const hadRestingExit = openOrders.some(
+      (o) => o.ticker.toUpperCase() === ticker && o.clientOrderId?.startsWith('exit-'),
+    );
+    const exitAggressiveness =
+      passiveCfg.enabled && !riskTrigger && !hadRestingExit ? passiveCfg.aggressiveness : 1;
     appendAudit({
       kind: 'exit',
       data: {
@@ -568,6 +690,8 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
         stop: trigger === 'hard_stop',
         orphan: !entry,
         ...(isFullExit ? {} : { fraction: exitFraction, qty: exitQty, of: absQty }),
+        ...(exitAggressiveness < 1 ? { passive: exitAggressiveness } : {}),
+        ...(passiveCfg.enabled && !riskTrigger && hadRestingExit ? { escalated: true } : {}),
       },
     });
     // Cancel any resting order for this ticker first — notably an RTH stop-loss
@@ -578,10 +702,9 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
     for (let i = openOrders.length - 1; i >= 0; i--) {
       if (openOrders[i]!.ticker.toUpperCase() === ticker) openOrders.splice(i, 1);
     }
-    // marketable exit limit, cent-rounded toward the passive side
-    const exitLimit = isLong
-      ? Math.floor(quote.bid * 100) / 100
-      : Math.ceil(quote.ask * 100) / 100;
+    // Exit limit: marketable at the touch (aggressiveness 1, the default) or
+    // resting inside the spread on a passive first attempt.
+    const exitLimit = exitLimitPrice(isLong ? 'sell' : 'buy', quote, exitAggressiveness);
     // RTH exits pair the limit with a protective stop (Alpaca OCO) so an
     // unfilled exit limit never leaves the position stop-less until the next
     // tick. Only attached when the stop is still strictly on the protective
@@ -609,7 +732,19 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
       extendedHours,
       ...(protectiveStop !== undefined ? { protectiveStop } : {}),
     };
-    appendAudit({ kind: 'proposed_order', data: order });
+    // decisionMid/spreadBps/session ride the audit record only (not the order):
+    // the feedback report joins fills back to these for implementation-
+    // shortfall measurement (decision-time mid -> fill price, by session).
+    const exitMid = (quote.bid + quote.ask) / 2;
+    appendAudit({
+      kind: 'proposed_order',
+      data: {
+        ...order,
+        decisionMid: Math.round(exitMid * 10_000) / 10_000,
+        spreadBps: exitMid > 0 ? Math.round(((quote.ask - quote.bid) / exitMid) * 10_000 * 10) / 10 : null,
+        session,
+      },
+    });
     const risk = riskCheck(order, riskContext());
     if (risk.allowed) {
       let placed;
@@ -685,11 +820,16 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
       const quote = quoteByTicker.get(ticker);
       if (!quote) continue; // no fresh mark; the GTC stop already resting still protects
       const isLong = position.side === 'long';
-      const mark = isLong ? quote.bid : quote.ask;
       const entry = exitEntryFor(ticker)?.entry;
       const plan = entry ? resolveExitPlan(entry, cfg) : resolveExitPlan(undefined, cfg);
-      // Idempotent within the tick: the exit loop already ratcheted the peak.
-      const peak = trackPositionPeak(ticker, position.side, mark, now.getTime());
+      // Idempotent within the tick: the exit loop already ratcheted the peak
+      // (same sanity gate applied there).
+      const peak = trackPositionPeak(
+        ticker,
+        position.side,
+        peakEligibleMark(quote, position.side, cfg.exit_engine.peak_sanity.min_top_size),
+        now.getTime(),
+      );
       const exitSide = isLong ? 'sell' : 'buy';
       const resting = openOrders.find(
         (o) =>
@@ -711,13 +851,22 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
       });
       if (action.action === 'none') continue;
       try {
-        if (action.action === 'replace') await broker.cancelOrder(action.cancelId);
-        const placedStop = await broker.placeStopOrder({
-          ticker: position.ticker,
-          side: exitSide,
-          qty: action.qty,
-          stopPrice: action.stopPrice,
-        });
+        // Replace is ATOMIC at the broker (PATCH): the old stop is superseded
+        // in the same operation, so there is no cancel-then-place window with
+        // the position unprotected — and a FAILED replace leaves the old stop
+        // resting instead of stop-less.
+        const placedStop =
+          action.action === 'replace'
+            ? await broker.replaceStopOrder(action.cancelId, {
+                qty: action.qty,
+                stopPrice: action.stopPrice,
+              })
+            : await broker.placeStopOrder({
+                ticker: position.ticker,
+                side: exitSide,
+                qty: action.qty,
+                stopPrice: action.stopPrice,
+              });
         appendAudit({
           kind: 'stop_ratchet',
           data: {
@@ -731,8 +880,9 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
           },
         });
       } catch (err) {
-        // Cancel/replace race (stop filled between fetch and cancel) or a
-        // rejected placement: audit and reconverge next tick.
+        // Replace race (stop filled between fetch and PATCH) or a rejected
+        // placement: audit and reconverge next tick. On the replace path the
+        // prior stop still rests, so protection is never lost here.
         appendAudit({
           kind: 'error',
           data: {
@@ -897,7 +1047,16 @@ export async function runTick(deps: TickDeps = {}): Promise<void> {
       extendedHours,
       ...(stopLoss !== undefined ? { stopLoss } : {}),
     };
-    appendAudit({ kind: 'proposed_order', data: order });
+    // Same shortfall-measurement fields as the exit path (audit-only).
+    appendAudit({
+      kind: 'proposed_order',
+      data: {
+        ...order,
+        decisionMid: Math.round(mid * 10_000) / 10_000,
+        spreadBps: Math.round(spreadBps * 10) / 10,
+        session,
+      },
+    });
     const risk = riskCheck(order, riskContext());
     if (risk.allowed) {
       const placed = await broker.placeLimitOrder(order);

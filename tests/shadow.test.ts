@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ConfigSchema } from '../src/config.js';
-import { shadowEntryRecord, shadowPortfolioScalar, shadowRegime } from '../src/shadow.js';
+import { shadowEntryRecord, shadowPortfolioScalar, shadowRegime, verdictAgreement } from '../src/shadow.js';
 import type { TickerMarketInfo } from '../src/candidates.js';
 
 const cfg = ConfigSchema.parse({ mode: 'paper' });
@@ -81,5 +81,45 @@ describe('shadowPortfolioScalar', () => {
       cfg,
     );
     expect(scalar).toBe(1);
+  });
+});
+
+describe('verdictAgreement (shadow-model bridge)', () => {
+  const v = (
+    analyst: string,
+    ticker: string,
+    direction: string,
+    conviction: number,
+  ): { analyst: string; ticker: string; direction: string; conviction: number } => ({
+    analyst,
+    ticker,
+    direction,
+    conviction,
+  });
+
+  it('joins on (analyst, ticker) and scores direction match + conviction delta', () => {
+    const primary = [
+      v('fundamental', 'NVDA', 'long', 0.7),
+      v('bear', 'NVDA', 'short', 0.6),
+      v('macro', 'GS', 'none', 0.5),
+    ];
+    const shadow = [
+      v('fundamental', 'nvda', 'long', 0.6), // case-insensitive ticker join
+      v('bear', 'NVDA', 'long', 0.6), // direction flip
+      v('sentiment', 'XOM', 'long', 0.9), // no primary counterpart -> ignored
+    ];
+    const a = verdictAgreement(primary, shadow);
+    expect(a.pairs).toBe(2);
+    expect(a.directionMatchPct).toBe(0.5);
+    expect(a.meanAbsConvictionDelta).toBeCloseTo(0.05, 4);
+    expect(a.directionalPrimary).toBe(2); // long + short (none excluded)
+    expect(a.directionalShadow).toBe(3);
+  });
+
+  it('zero joint pairs yields nulls, not fake agreement', () => {
+    const a = verdictAgreement([v('bear', 'NVDA', 'short', 0.6)], []);
+    expect(a.pairs).toBe(0);
+    expect(a.directionMatchPct).toBeNull();
+    expect(a.meanAbsConvictionDelta).toBeNull();
   });
 });

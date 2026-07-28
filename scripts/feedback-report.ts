@@ -23,10 +23,13 @@ import {
   analystStats,
   attributeExitTriggers,
   fitCalibration,
+  nearestDecision,
   pairRoundTrips,
   postExitFollowthrough,
   proposeWeights,
   scoreJudgeVeto,
+  shortfallBps,
+  type DecisionRecord,
   type ExitEvent,
   type JudgeVeto,
   type RoundTrip,
@@ -172,6 +175,49 @@ export async function main(): Promise<void> {
       bucket.avgPostExit3dPct = Math.round((d3s.reduce((s, x) => s + x, 0) / d3s.length) * 10_000) / 10_000;
   }
 
+  // ---- implementation shortfall: decision-time mid -> fill price -----------
+  // Verifies the 2026-07-27 execution-hygiene flags (registry rows exec-*)
+  // with a fill-quality number, and gates passive-exits-2026-07-28.
+  const decisions: DecisionRecord[] = audits
+    .filter(
+      (a) =>
+        a.kind === 'proposed_order' &&
+        typeof a.data.decisionMid === 'number' &&
+        (a.data.side === 'buy' || a.data.side === 'sell') &&
+        typeof a.data.ticker === 'string',
+    )
+    .map((a) => ({
+      tsMs: Date.parse(a.ts),
+      ticker: String(a.data.ticker).toUpperCase(),
+      side: a.data.side as 'buy' | 'sell',
+      intent: typeof a.data.intent === 'string' ? a.data.intent : 'unknown',
+      ...(typeof a.data.session === 'string' ? { session: a.data.session } : {}),
+      decisionMid: a.data.decisionMid as number,
+    }));
+  const shortfallBuckets: Record<string, { n: number; meanBps: number }> = {};
+  let shortfallMatched = 0;
+  let shortfallUnmatched = 0;
+  for (const f of fills) {
+    const side = f.side === 'sell_short' ? 'sell' : f.side;
+    const d = nearestDecision(
+      { tsMs: Date.parse(f.transactionTime), ticker: f.ticker.toUpperCase(), side },
+      decisions,
+    );
+    const bps = d ? shortfallBps(side, d.decisionMid, f.price) : undefined;
+    if (d === undefined || bps === undefined) {
+      shortfallUnmatched++;
+      continue;
+    }
+    shortfallMatched++;
+    const key = `${d.session ?? 'unknown'}|${d.intent}`;
+    const bucket = (shortfallBuckets[key] ??= { n: 0, meanBps: 0 });
+    bucket.n += 1;
+    bucket.meanBps += bps;
+  }
+  for (const bucket of Object.values(shortfallBuckets)) {
+    bucket.meanBps = Math.round((bucket.meanBps / bucket.n) * 100) / 100;
+  }
+
   const vetoScores = vetoes.map((v) =>
     scoreJudgeVeto(v, closesByTicker.get(v.ticker.toUpperCase()) ?? []),
   );
@@ -230,6 +276,12 @@ export async function main(): Promise<void> {
       byTrigger,
       note: 'avgPostExit1d/3dPct signed so POSITIVE = position kept moving our way after exit (money left on table); trail/time_stop rows with big positives mean exits fire too early',
     },
+    executionShortfall: {
+      matchedFills: shortfallMatched,
+      unmatchedFills: shortfallUnmatched,
+      bySessionIntent: shortfallBuckets,
+      note: 'decision-time mid -> fill price, bps, POSITIVE = cost vs mid. Verifies the 2026-07-27 execution-hygiene flags with fill quality (not P&L) and gates passive-exits-2026-07-28. Fills before 2026-07-28 have no decisionMid audit and land in unmatchedFills.',
+    },
     judgeVetoes: judgeVetoSummary,
     trips: trips.map((t, i) => ({ ...t, trigger: triggers[i], postExit: followthroughs[i] })),
     governance:
@@ -253,6 +305,10 @@ export async function main(): Promise<void> {
   console.log(
     `  judge vetoes: n=${judgeVetoSummary.n} scored=${judgeVetoSummary.scored} avgForgone d1=${judgeVetoSummary.avgForgone1dPct ?? 'n/a'}% d3=${judgeVetoSummary.avgForgone3dPct ?? 'n/a'}%`,
   );
+  for (const [key, b] of Object.entries(shortfallBuckets)) {
+    console.log(`  shortfall ${key.padEnd(20)} n=${String(b.n).padStart(3)} mean=${b.meanBps.toFixed(2)} bps`);
+  }
+  console.log(`  shortfall coverage: ${shortfallMatched} matched, ${shortfallUnmatched} unmatched fills`);
   console.log(`  report: ${outFile}`);
 }
 

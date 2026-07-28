@@ -3,6 +3,12 @@ live_trading_acknowledged: false
 universe:
   nominations_per_agent: 7   # raised 2026-07-27 (sample-rate push: more shots on goal)
   max_candidates: 25         # raised 2026-07-27 (sample-rate push)
+  # Verdict round runs in chunks of <= this many candidates per LLM call
+  # (2026-07-28): the single-call form saturated its 16k output cap from ~18
+  # candidates (900 tokens/candidate), silently re-opening the 2026-07-27
+  # truncation incident once max_candidates rose to 25. 8 * 900 = 7.2k per
+  # call; chunks run sequentially per analyst so concurrency is unchanged.
+  verdict_chunk_size: 8
   min_price: 5
   # CONSOLIDATED dollar volume since 2026-07-27: daily bars now follow
   # data_feed (SIP), so volume is full-tape. Under the old hardcoded IEX bars
@@ -125,6 +131,13 @@ exit_engine:
   trail_debounce:
     confirm_ticks: 2
     min_exit_top_size: 100
+  # Peak-ratchet data-quality gate (2026-07-28): a quote only advances the
+  # persisted favorable peak when the displayed size behind the mark is >= 100
+  # (same unit and level as the trail debounce). The peak never decays, so one
+  # junk off-hours print would otherwise poison the trail retrace and the GTC
+  # stop level permanently. Crossed books are dropped unconditionally upstream.
+  peak_sanity:
+    min_top_size: 100
 max_order_notional_usd: 1000  # halved 2026-07-27 (sample-rate push)
 max_spread_bps: 50      # flat fallback; superseded by execution.gates_by_session on SIP
 data_feed: sip          # sip (paid, subscribed 2026-07-14): real consolidated NBBO. iex = free single-venue, unrepresentative spreads that trip the spread gate. Since 2026-07-27 daily BARS also follow this feed (consolidated volume).

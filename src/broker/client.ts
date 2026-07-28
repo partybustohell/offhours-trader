@@ -187,8 +187,13 @@ export interface BrokerClient {
   /** Simple resting protective stop (GTC): the trailing-stop ratchet's order.
    *  GTC so the protection survives an engine outage. */
   placeStopOrder(o: ProposedStopOrder): Promise<BrokerOrder>;
-  /** Cancel one order by broker id (ratchet cancel/replace). Throws on
-   *  failure so the caller can skip the replacement leg. */
+  /** ATOMIC stop replacement (Alpaca PATCH /v2/orders/{id}): the broker swaps
+   *  the resting stop for the new level/qty without an unprotected window —
+   *  unlike cancel-then-place, a failure here leaves the OLD stop resting.
+   *  Returns the replacement order (new broker id). Throws on failure. */
+  replaceStopOrder(id: string, o: { qty: number; stopPrice: number }): Promise<BrokerOrder>;
+  /** Cancel one order by broker id. Throws on failure so the caller can skip
+   *  the replacement leg. */
   cancelOrder(id: string): Promise<void>;
   /** Cancel all open orders for a ticker (e.g. a resting RTH stop-loss leg
    *  before a manual exit). No-op when there are none. */
@@ -393,6 +398,51 @@ export class AlpacaBroker implements BrokerClient {
     try {
       const raw = await this.request('/v2/orders', {
         method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      return mapOrder(raw as AlpacaOrder);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (/client.?order.?id/i.test(message)) {
+        const raw = await this.request(
+          `/v2/orders:by_client_order_id?client_order_id=${encodeURIComponent(clientOrderId)}`,
+        );
+        return mapOrder(raw as AlpacaOrder);
+      }
+      throw err;
+    }
+  }
+
+  async replaceStopOrder(id: string, o: { qty: number; stopPrice: number }): Promise<BrokerOrder> {
+    // Fresh idempotency id per call, same duplicate-safety rationale as
+    // placeLimitOrder: if the PATCH commits but the response is lost, the
+    // retry against the now-'replaced' order fails and recovery goes through
+    // the client id instead of stacking a second stop.
+    const clientOrderId = `tstop-${randomUUID()}`;
+    if (this.mode === 'dry-run') {
+      const ts = new Date().toISOString();
+      return {
+        id: `dry-${ts}`,
+        ticker: '',
+        side: 'sell',
+        qty: o.qty,
+        limitPrice: 0,
+        stopPrice: o.stopPrice,
+        status: 'dry_run',
+        submittedAt: ts,
+        clientOrderId,
+        filledQty: 0,
+      };
+    }
+    const body: Record<string, unknown> = {
+      qty: String(o.qty),
+      stop_price: o.stopPrice.toFixed(2),
+      client_order_id: clientOrderId,
+    };
+    try {
+      const raw = await this.request(`/v2/orders/${id}`, {
+        method: 'PATCH',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
       });

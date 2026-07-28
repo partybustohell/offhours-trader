@@ -478,6 +478,69 @@ describe('AlpacaBroker.placeStopOrder', () => {
   });
 });
 
+describe('AlpacaBroker.replaceStopOrder', () => {
+  const replacedJson = {
+    id: 'stop-2',
+    symbol: 'NVDA',
+    side: 'sell',
+    qty: '18',
+    type: 'stop',
+    stop_price: '205.81',
+    status: 'accepted',
+    submitted_at: '2026-07-28T14:00:00Z',
+  };
+
+  it('PATCHes the resting order atomically with a fresh tstop- client id', async () => {
+    const { fetchFn, calls } = makeFetch([{ status: 200, json: replacedJson }]);
+    const broker = new AlpacaBroker(paperCfg, paperEnv, fetchFn, noSleep);
+    const replaced = await broker.replaceStopOrder('stop-1', { qty: 18, stopPrice: 205.81 });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe('https://paper-api.alpaca.markets/v2/orders/stop-1');
+    expect(calls[0]!.init?.method).toBe('PATCH');
+    const body = JSON.parse(String(calls[0]!.init?.body));
+    expect(body.client_order_id).toMatch(/^tstop-/);
+    expect(body).toEqual({
+      qty: '18',
+      stop_price: '205.81',
+      client_order_id: body.client_order_id,
+    });
+    expect(replaced.id).toBe('stop-2');
+    expect(replaced.stopPrice).toBe(205.81);
+  });
+
+  it('a hard PATCH failure propagates (the old stop still rests at the broker)', async () => {
+    const { fetchFn } = makeFetch([
+      { status: 422, json: { message: 'order is not open' } },
+    ]);
+    const broker = new AlpacaBroker(paperCfg, paperEnv, fetchFn, noSleep);
+    await expect(
+      broker.replaceStopOrder('stop-1', { qty: 18, stopPrice: 205.81 }),
+    ).rejects.toThrow(/order is not open/);
+  });
+
+  it('recovers the committed replacement when the retry hits a duplicate client id', async () => {
+    const { fetchFn, calls } = makeFetch([
+      { status: 422, json: { message: 'client_order_id must be unique' } },
+      { status: 200, json: replacedJson },
+    ]);
+    const broker = new AlpacaBroker(paperCfg, paperEnv, fetchFn, noSleep);
+    const replaced = await broker.replaceStopOrder('stop-1', { qty: 18, stopPrice: 205.81 });
+    expect(calls).toHaveLength(2);
+    expect(calls[1]!.url).toContain('/v2/orders:by_client_order_id?client_order_id=tstop-');
+    expect(replaced.id).toBe('stop-2');
+  });
+
+  it('dry-run synthesizes the replacement without any HTTP call', async () => {
+    const { fetchFn, calls } = makeFetch([{ status: 500, json: {} }]);
+    const broker = new AlpacaBroker(dryCfg, paperEnv, fetchFn, noSleep);
+    const replaced = await broker.replaceStopOrder('stop-1', { qty: 18, stopPrice: 205.81 });
+    expect(calls).toHaveLength(0);
+    expect(replaced.status).toBe('dry_run');
+    expect(replaced.stopPrice).toBe(205.81);
+  });
+});
+
 describe('AlpacaBroker.cancelOrder', () => {
   it('DELETEs the order by id and tolerates the empty 2xx body Alpaca sends', async () => {
     // Alpaca answers DELETE with 204 No Content. json: undefined stringifies

@@ -3,10 +3,13 @@ import {
   analystStats,
   attributeExitTriggers,
   fitCalibration,
+  nearestDecision,
   pairRoundTrips,
   postExitFollowthrough,
   proposeWeights,
   scoreJudgeVeto,
+  shortfallBps,
+  type DecisionRecord,
   type ExitEvent,
   type RoundTrip,
 } from '../src/feedback.js';
@@ -207,5 +210,63 @@ describe('analystStats + proposeWeights', () => {
     expect(proposed.bear).toBe(0.6);
     expect(proposed.technical).toBe(0.8); // untouched
     expect(proposed.macro).toBe(0.6); // n=0 untouched
+  });
+});
+
+describe('shortfallBps (implementation shortfall)', () => {
+  it('positive = cost vs the decision mid, direction-aware', () => {
+    // buy filled ABOVE mid costs; 100 -> 100.10 = +10 bps
+    expect(shortfallBps('buy', 100, 100.1)).toBeCloseTo(10, 5);
+    // sell filled BELOW mid costs; 100 -> 99.90 = +10 bps
+    expect(shortfallBps('sell', 100, 99.9)).toBeCloseTo(10, 5);
+    // price improvement is negative
+    expect(shortfallBps('buy', 100, 99.95)).toBeCloseTo(-5, 5);
+  });
+
+  it('unusable prices yield undefined, never a fake zero', () => {
+    expect(shortfallBps('buy', 0, 100)).toBeUndefined();
+    expect(shortfallBps('sell', 100, 0)).toBeUndefined();
+  });
+});
+
+describe('nearestDecision (fill -> proposed_order join)', () => {
+  const d = (tsMs: number, over: Partial<DecisionRecord> = {}): DecisionRecord => ({
+    tsMs,
+    ticker: 'NVDA',
+    side: 'buy',
+    intent: 'entry',
+    session: 'premarket',
+    decisionMid: 100,
+    ...over,
+  });
+
+  it('picks the latest same-ticker same-side decision at or before the fill', () => {
+    const decisions = [d(1000), d(5000), d(9000, { decisionMid: 101 })];
+    const hit = nearestDecision({ tsMs: 10_000, ticker: 'NVDA', side: 'buy' }, decisions);
+    expect(hit?.decisionMid).toBe(101);
+  });
+
+  it('a re-proposal (escalated passive exit) wins by recency', () => {
+    const decisions = [
+      d(1000, { side: 'sell', intent: 'exit', decisionMid: 100.05 }), // passive attempt
+      d(901_000, { side: 'sell', intent: 'exit', decisionMid: 100.0 }), // escalation, 15 min later
+    ];
+    const hit = nearestDecision({ tsMs: 902_000, ticker: 'NVDA', side: 'sell' }, decisions);
+    expect(hit?.decisionMid).toBe(100.0);
+  });
+
+  it('ignores wrong ticker, wrong side, decisions after the fill, and stale decisions', () => {
+    const decisions = [
+      d(1000, { ticker: 'AMD' }),
+      d(1000, { side: 'sell' }),
+      d(200_000), // after the fill (beyond 60s tolerance)
+      d(-9 * 3_600_000), // older than the 8h window
+    ];
+    expect(nearestDecision({ tsMs: 100_000, ticker: 'NVDA', side: 'buy' }, decisions)).toBeUndefined();
+  });
+
+  it('tolerates small clock skew: a decision up to 60s after the fill still matches', () => {
+    const decisions = [d(100_030)];
+    expect(nearestDecision({ tsMs: 100_000, ticker: 'NVDA', side: 'buy' }, decisions)).toBeDefined();
   });
 });

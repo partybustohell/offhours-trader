@@ -53,6 +53,104 @@ describe('runVerdicts degradation accounting', () => {
     expect(out.droppedAnalysts).toHaveLength(5);
   });
 
+  it('chunks the round at verdict_chunk_size candidates per call, self-contained prompts', async () => {
+    const chunkCfg = ConfigSchema.parse({ mode: 'paper', universe: { verdict_chunk_size: 2 } });
+    const five: CandidateFile = {
+      date: '2026-07-28',
+      candidates: ['AAA', 'BBB', 'CCC', 'DDD', 'EEE'].map((t) => ({
+        ticker: t,
+        nominatedBy: [],
+        lastPrice: 100,
+        avgDollarVolume20d: 60_000_000,
+      })),
+      rejected: [],
+    };
+    const calls: { tickers: string[]; maxTokens: number }[] = [];
+    const client: LlmClient = {
+      messages: {
+        create: async (params) => {
+          const user = String((params.messages[0] as { content: unknown }).content);
+          const m = /Candidate set \(\d+ tickers\): ([A-Z, ]+)/.exec(user);
+          const tickers = m ? m[1]!.split(', ') : [];
+          calls.push({ tickers, maxTokens: params.max_tokens });
+          // Chunk prompts must be self-contained: only the chunk's tickers appear.
+          for (const t of five.candidates.map((c) => c.ticker)) {
+            if (!tickers.includes(t)) expect(user).not.toContain(`"ticker":"${t}"`);
+          }
+          return {
+            stop_reason: 'tool_use',
+            content: [
+              {
+                type: 'tool_use',
+                id: 't1',
+                name: 'submit_verdicts',
+                input: {
+                  verdicts: tickers.map((ticker) => ({
+                    ticker,
+                    direction: 'none',
+                    conviction: 0.5,
+                    horizon: 'days',
+                    evidence: [],
+                    invalidation_conditions: [],
+                  })),
+                },
+              },
+            ],
+          } as never;
+        },
+      },
+    };
+    const out = await runVerdicts(chunkCfg, five, { barsBySymbol: {}, newsBySymbol: {} }, client);
+    // 5 candidates / chunk 2 -> 3 chunks per analyst, 5 analysts = 15 calls.
+    expect(calls).toHaveLength(15);
+    expect(calls.every((c) => c.tickers.length <= 2)).toBe(true);
+    // Per-chunk output budget: max(4000, 2*900) = 4000 — far under the cap.
+    expect(calls.every((c) => c.maxTokens === 4000)).toBe(true);
+    expect(out.droppedAnalysts).toEqual([]);
+    expect(out.verdicts).toHaveLength(25); // 5 tickers x 5 analysts
+  });
+
+  it('a partially failed analyst keeps successful-chunk verdicts but counts as dropped', async () => {
+    const chunkCfg = ConfigSchema.parse({ mode: 'paper', universe: { verdict_chunk_size: 1 } });
+    const client: LlmClient = {
+      messages: {
+        create: async (params) => {
+          const user = String((params.messages[0] as { content: unknown }).content);
+          if (user.includes('Candidate set (1 tickers): BBB')) {
+            throw Object.assign(new Error('boom'), { status: 400 });
+          }
+          return {
+            stop_reason: 'tool_use',
+            content: [
+              {
+                type: 'tool_use',
+                id: 't1',
+                name: 'submit_verdicts',
+                input: {
+                  verdicts: [
+                    {
+                      ticker: 'AAA',
+                      direction: 'long',
+                      conviction: 0.7,
+                      horizon: 'days',
+                      evidence: ['beat'],
+                      invalidation_conditions: ['closes below 90'],
+                    },
+                  ],
+                },
+              },
+            ],
+          } as never;
+        },
+      },
+    };
+    const out = await runVerdicts(chunkCfg, candidates, { barsBySymbol: {}, newsBySymbol: {} }, client);
+    // AAA chunk succeeded for every analyst; BBB chunk failed for every analyst.
+    expect(out.verdicts).toHaveLength(5);
+    expect(out.verdicts.every((v) => v.ticker === 'AAA')).toBe(true);
+    expect(out.droppedAnalysts).toHaveLength(5);
+  });
+
   it('valid verdicts still flow through', async () => {
     const out = await runVerdicts(
       cfg,

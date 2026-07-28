@@ -544,6 +544,7 @@ export async function runEpisode(
     getTodayOrders: () => ledger.getTodayOrders(),
     cancelOrdersFor: (t: string) => ledger.cancelOrdersFor(t),
     placeStopOrder: () => ledger.placeStopOrder(),
+    replaceStopOrder: () => ledger.replaceStopOrder(),
     cancelOrder: (id: string) => ledger.cancelOrder(id),
     getAsset: (t: string) => ledger.getAsset(t),
     placeLimitOrder: async (o: ProposedOrder) => {

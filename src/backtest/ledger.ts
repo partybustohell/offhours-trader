@@ -320,6 +320,11 @@ export class SimLedger implements BrokerClient {
     throw new Error('SimLedger.placeStopOrder: native stop ratchet is not supported in backtests');
   }
 
+  async replaceStopOrder(): Promise<never> {
+    // Same contract as placeStopOrder: the ratchet must never run in a sim.
+    throw new Error('SimLedger.replaceStopOrder: native stop ratchet is not supported in backtests');
+  }
+
   async cancelOrder(id: string): Promise<void> {
     const order = this.orders.find((o) => o.id === id);
     if (order && order.status === 'new') order.status = 'canceled';

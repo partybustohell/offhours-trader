@@ -5,7 +5,7 @@ import type { Config } from './config.js';
 import { loadConfig } from './config.js';
 import { nowET } from './clock.js';
 import { appendAudit } from './audit.js';
-import { candidatesPath, readJsonIfExists, thesisPath, verdictsPath, writeJsonAtomic } from './paths.js';
+import { candidatesPath, readJsonIfExists, thesisPath, verdictsPath, verdictsShadowPath, writeJsonAtomic } from './paths.js';
 import { buildCandidates, type TickerMarketInfo } from './candidates.js';
 import { computeThesisEntries, thesisExpiry, rthThesisExpiry } from './synthesis.js';
 import { computeRegime, NEUTRAL_REGIME } from './regime.js';
@@ -20,7 +20,8 @@ import { writeNarratives } from './agents/narrative.js';
 import type { LlmClient } from './agents/llm.js';
 import { mergedExitPlan } from './exits.js';
 import { loadEarningsCalendar, ymdRange } from './broker/earnings.js';
-import { shadowEntryRecord, shadowPortfolioScalar, shadowRegime } from './shadow.js';
+import { loadRecentFilings } from './broker/edgar.js';
+import { shadowEntryRecord, shadowPortfolioScalar, shadowRegime, verdictAgreement } from './shadow.js';
 
 export interface PipelineDeps {
   cfg?: Config;
@@ -242,12 +243,35 @@ export async function runPipeline(deps: PipelineDeps = {}): Promise<Thesis> {
   // deterministic features and must never leak the 52-week extremes back into the
   // prompt. This keeps the verdict prompt byte-identical to before.
   const barsBySymbol = new Map([...featureBarsBySymbol].map(([sym, bars]) => [sym, bars.slice(-25)]));
-  const verdictFile = await runVerdicts(
-    cfg,
-    candidateFile,
-    { barsBySymbol, newsBySymbol: groupNewsBySymbol(candidateNews, candidateTickers) },
-    deps.llm,
-  );
+
+  // SEC primary text (universe.edgar_content, flag-off): each candidate's
+  // recent 8-K / press-release exhibit, fetched fail-open — a degraded ticker
+  // just carries no filing text. Audited either way for coverage tracking.
+  let filingsBySymbol: Map<string, { form: string; filed: string; text: string }> | undefined;
+  if (cfg.universe.edgar_content.enabled) {
+    const { filings, degraded } = await loadRecentFilings(
+      candidateTickers,
+      cfg.universe.edgar_content,
+      now,
+    );
+    filingsBySymbol = filings;
+    appendAudit({
+      kind: 'tick',
+      data: {
+        stage: 'edgar_content',
+        fetched: [...filings.keys()],
+        degraded,
+        note: 'fail-open: degraded tickers proceed without primary text',
+      },
+    });
+  }
+
+  const verdictData = {
+    barsBySymbol,
+    newsBySymbol: groupNewsBySymbol(candidateNews, candidateTickers),
+    ...(filingsBySymbol ? { filingsBySymbol } : {}),
+  };
+  const verdictFile = await runVerdicts(cfg, candidateFile, verdictData, deps.llm);
 
   // Enrich market info with per-name signal features from the FULL candidate-bar
   // history, and build the per-ticker return series for the whole-book portfolio
@@ -274,6 +298,42 @@ export async function runPipeline(deps: PipelineDeps = {}): Promise<Thesis> {
   }
   for (const analyst of verdictFile.droppedAnalysts) {
     appendAudit({ kind: 'verdict', data: { analyst, dropped: true } });
+  }
+
+  // Shadow-MODEL verdict round (model.shadow_analysts, deprecation bridge):
+  // identical inputs, candidate model, never traded. Audit-only agreement
+  // stats accumulate the continuity evidence for a future model swap. Any
+  // failure is audited and ignored — the bridge must never block a thesis.
+  if (cfg.model.shadow_analysts && cfg.model.shadow_analysts !== cfg.model.analysts) {
+    try {
+      const shadowCfg: Config = {
+        ...cfg,
+        model: { ...cfg.model, analysts: cfg.model.shadow_analysts, analysts_by_name: {} },
+      };
+      // Identical inputs to the primary round — that is the whole point.
+      const shadowFile = await runVerdicts(shadowCfg, candidateFile, verdictData, deps.llm);
+      writeJsonAtomic(verdictsShadowPath(ymd), shadowFile);
+      appendAudit({
+        kind: 'counterfactual',
+        data: {
+          note: 'SHADOW MODEL verdict round (deprecation bridge; not traded)',
+          date: ymd,
+          thesisKind: kind,
+          model: cfg.model.shadow_analysts,
+          agreement: verdictAgreement(verdictFile.verdicts, shadowFile.verdicts),
+          droppedAnalysts: shadowFile.droppedAnalysts,
+        },
+      });
+    } catch (err) {
+      appendAudit({
+        kind: 'error',
+        data: {
+          stage: 'shadow_model_verdicts',
+          model: cfg.model.shadow_analysts,
+          message: err instanceof Error ? err.message : String(err),
+        },
+      });
+    }
   }
 
   const computed = computeThesisEntries(

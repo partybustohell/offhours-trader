@@ -762,6 +762,7 @@ describe('native stop ratchet', () => {
   interface StopCalls {
     stops: { ticker: string; side: string; qty: number; stopPrice: number }[];
     cancels: string[];
+    replaces: { id: string; qty: number; stopPrice: number }[];
   }
 
   function ratchetBroker(
@@ -814,6 +815,24 @@ describe('native stop ratchet', () => {
       cancelOrder: async (id: string) => {
         calls.cancels.push(id);
       },
+      replaceStopOrder: async (
+        id: string,
+        o: { qty: number; stopPrice: number },
+      ): Promise<BrokerOrder> => {
+        calls.replaces.push({ id, qty: o.qty, stopPrice: o.stopPrice });
+        return {
+          id: `replaced-${calls.replaces.length}`,
+          ticker: 'NVDA',
+          side: 'sell',
+          qty: o.qty,
+          limitPrice: 0,
+          stopPrice: o.stopPrice,
+          status: 'accepted',
+          submittedAt: NOW.toISOString(),
+          clientOrderId: 'tstop-test',
+          filledQty: 0,
+        };
+      },
     } as unknown as BrokerClient;
   }
 
@@ -836,7 +855,7 @@ describe('native stop ratchet', () => {
 
   it('places a missing protective stop at the hard-stop level (unarmed)', async () => {
     writeThesis(emptyThesis());
-    const calls: StopCalls = { stops: [], cancels: [] };
+    const calls: StopCalls = { stops: [], cancels: [], replaces: [] };
     await runTick({
       cfg: ratchetCfg(),
       now: NOW,
@@ -851,7 +870,7 @@ describe('native stop ratchet', () => {
     expect(readAudit()).toContain('"kind":"stop_ratchet"');
   });
 
-  it('armed by the persisted peak: cancels the stale stop and ratchets up', async () => {
+  it('armed by the persisted peak: atomically replaces the stale stop upward', async () => {
     writeThesis(emptyThesis());
     fs.writeFileSync(
       path.join(dir, 'out', 'position-peaks.json'),
@@ -859,7 +878,7 @@ describe('native stop ratchet', () => {
         NVDA: { side: 'long', entryTimeMs: NOW.getTime() - 6 * 86_400_000, peak: 214.39 },
       }),
     );
-    const calls: StopCalls = { stops: [], cancels: [] };
+    const calls: StopCalls = { stops: [], cancels: [], replaces: [] };
     await runTick({
       cfg: ratchetCfg(),
       now: NOW,
@@ -872,10 +891,42 @@ describe('native stop ratchet', () => {
       llm: {} as never,
     });
     // max(hard 185.35, breakeven 201.47, peak 214.39 * 0.96 = 205.8144) -> 205.81
-    expect(calls.cancels).toEqual(['stop-old']);
-    expect(calls.stops).toEqual([
-      { ticker: 'NVDA', side: 'sell', qty: 18, stopPrice: 205.81 },
-    ]);
+    // via PATCH replace — never cancel-then-place (no unprotected window).
+    expect(calls.replaces).toEqual([{ id: 'stop-old', qty: 18, stopPrice: 205.81 }]);
+    expect(calls.cancels).toEqual([]);
+    expect(calls.stops).toEqual([]);
+  });
+
+  it('a failed replace leaves the old stop resting (audited, reconverges next tick)', async () => {
+    writeThesis(emptyThesis());
+    fs.writeFileSync(
+      path.join(dir, 'out', 'position-peaks.json'),
+      JSON.stringify({
+        NVDA: { side: 'long', entryTimeMs: NOW.getTime() - 6 * 86_400_000, peak: 214.39 },
+      }),
+    );
+    const calls: StopCalls = { stops: [], cancels: [], replaces: [] };
+    const broker = ratchetBroker(
+      { equity: 100000, cash: 78000, positions: [nvdaLong] },
+      [restingStop('stop-old', 185.55)],
+      calls,
+    );
+    (broker as { replaceStopOrder: unknown }).replaceStopOrder = async () => {
+      throw new Error('order is not open');
+    };
+    await runTick({
+      cfg: ratchetCfg(),
+      now: NOW,
+      broker,
+      marketData: fakeMd([quote('NVDA', 207.0, 207.1)]),
+      llm: {} as never,
+    });
+    // No cancel was ever issued, so the prior protection still rests.
+    expect(calls.cancels).toEqual([]);
+    expect(calls.stops).toEqual([]);
+    const audit = readAudit();
+    expect(audit).toContain('"stage":"stop_ratchet"');
+    expect(audit).toContain('order is not open');
   });
 
   it('never loosens: an already-tighter resting stop is left alone', async () => {
@@ -886,7 +937,7 @@ describe('native stop ratchet', () => {
         NVDA: { side: 'long', entryTimeMs: NOW.getTime() - 6 * 86_400_000, peak: 214.39 },
       }),
     );
-    const calls: StopCalls = { stops: [], cancels: [] };
+    const calls: StopCalls = { stops: [], cancels: [], replaces: [] };
     await runTick({
       cfg: ratchetCfg(),
       now: NOW,
@@ -904,7 +955,7 @@ describe('native stop ratchet', () => {
 
   it('stays dark when native_stop_ratchet is disabled (default)', async () => {
     writeThesis(emptyThesis());
-    const calls: StopCalls = { stops: [], cancels: [] };
+    const calls: StopCalls = { stops: [], cancels: [], replaces: [] };
     await runTick({
       cfg: baseCfg(),
       now: NOW,
@@ -924,7 +975,7 @@ describe('native stop ratchet', () => {
         NVDA: { side: 'long', entryTimeMs: NOW.getTime() - 6 * 86_400_000, peak: 214.39 },
       }),
     );
-    const calls: StopCalls = { stops: [], cancels: [] };
+    const calls: StopCalls = { stops: [], cancels: [], replaces: [] };
     const placed: ProposedOrder[] = [];
     await runTick({
       cfg: ratchetCfg(),
@@ -950,7 +1001,7 @@ describe('native stop ratchet', () => {
     // leaving open positions unmonitored (every Monday premarket). Now the
     // tick continues in exits-only mode: the ratchet must still place the
     // protective stop.
-    const calls: StopCalls = { stops: [], cancels: [] };
+    const calls: StopCalls = { stops: [], cancels: [], replaces: [] };
     await runTick({
       cfg: ratchetCfg(),
       now: NOW,
@@ -972,7 +1023,7 @@ describe('native stop ratchet', () => {
         FSLR: { side: 'short', entryTimeMs: NOW.getTime() - 2 * 3_600_000, peak: 220 },
       }),
     );
-    const calls: StopCalls = { stops: [], cancels: [] };
+    const calls: StopCalls = { stops: [], cancels: [], replaces: [] };
     const placed: ProposedOrder[] = [];
     await runTick({
       cfg: ratchetCfg(),
@@ -989,5 +1040,149 @@ describe('native stop ratchet', () => {
     expect(placed).toHaveLength(1);
     expect(placed[0]!.intent).toBe('exit');
     expect(calls.stops).toEqual([]);
+  });
+
+  it('a crossed book is dropped whole: no exit, no peak write, exit_starved audited', async () => {
+    writeThesis(fslrThesis({ hardStopPct: 8, timeStopHours: 1 })); // time stop WOULD fire on a real quote
+    fs.writeFileSync(
+      path.join(dir, 'out', 'position-peaks.json'),
+      JSON.stringify({
+        FSLR: { side: 'short', entryTimeMs: NOW.getTime() - 2 * 3_600_000, peak: 220 },
+      }),
+    );
+    const placed: ProposedOrder[] = [];
+    await runTick({
+      cfg: baseCfg(),
+      now: NOW,
+      broker: fakeBroker({ equity: 100000, cash: 100000, positions: [shortPosition] }, placed),
+      // bid > ask: inconsistent snapshot — junk, not a price
+      marketData: fakeMd([quote('FSLR', 219.5, 219.0)]),
+      llm: {} as never,
+    });
+    expect(placed).toHaveLength(0);
+    const peaks = JSON.parse(
+      fs.readFileSync(path.join(dir, 'out', 'position-peaks.json'), 'utf8'),
+    ) as Record<string, { peak: number }>;
+    expect(peaks.FSLR!.peak).toBe(220); // untouched — junk never ratchets state
+    const audit = readAudit();
+    expect(audit).toContain('"crossed":1');
+    expect(audit).toContain('"stage":"exit_starved"');
+  });
+
+  it('a thin mark never advances the persisted peak when peak_sanity binds', async () => {
+    writeThesis(emptyThesis());
+    fs.writeFileSync(
+      path.join(dir, 'out', 'position-peaks.json'),
+      JSON.stringify({
+        NVDA: { side: 'long', entryTimeMs: NOW.getTime() - 6 * 86_400_000, peak: 214.39 },
+      }),
+    );
+    const cfg = ratchetCfg();
+    cfg.exit_engine.peak_sanity.min_top_size = 100;
+    const calls: StopCalls = { stops: [], cancels: [], replaces: [] };
+    await runTick({
+      cfg,
+      now: NOW,
+      broker: ratchetBroker(
+        { equity: 100000, cash: 78000, positions: [nvdaLong] },
+        [restingStop('stop-old', 185.55)],
+        calls,
+      ),
+      // bid 216 would be a new high, but only 40 shares are displayed behind it
+      marketData: fakeMd([
+        { ticker: 'NVDA', bid: 216.0, ask: 216.1, bidSize: 40, askSize: 500, last: 216.05, asOf: NOW.toISOString() },
+      ]),
+      llm: {} as never,
+    });
+    const peaks = JSON.parse(
+      fs.readFileSync(path.join(dir, 'out', 'position-peaks.json'), 'utf8'),
+    ) as Record<string, { peak: number }>;
+    expect(peaks.NVDA!.peak).toBe(214.39); // thin print rejected by the gate
+    // The ratchet still converges from the LAST GOOD peak (214.39 * 0.96).
+    expect(calls.replaces).toEqual([{ id: 'stop-old', qty: 18, stopPrice: 205.81 }]);
+  });
+});
+
+describe('passive-first exits (execution.exit_passive)', () => {
+  const passiveCfg = (): Config =>
+    ConfigSchema.parse({ mode: 'paper', execution: { exit_passive: { enabled: true } } });
+
+  it('a target exit rests inside the spread on its first attempt', async () => {
+    writeThesis(fslrThesis({ hardStopPct: 8, target: 219.5, timeStopHours: 240 }));
+    const placed: ProposedOrder[] = [];
+    await runTick({
+      cfg: passiveCfg(),
+      now: NOW,
+      broker: fakeBroker({ equity: 100000, cash: 100000, positions: [shortPosition] }, placed),
+      // short target: mark(ask) 219.5 <= 219.5 fires; cover mid = 219.25
+      marketData: fakeMd([quote('FSLR', 219.0, 219.5)]),
+      llm: {} as never,
+    });
+    expect(placed).toHaveLength(1);
+    expect(placed[0]!.limitPrice).toBe(219.25); // mid, not ceil(ask) = 219.5
+    const audit = readAudit();
+    expect(audit).toContain('"trigger":"target"');
+    expect(audit).toContain('"passive":0.5');
+  });
+
+  it('escalates to marketable when a prior exit order still rests unfilled', async () => {
+    writeThesis(fslrThesis({ hardStopPct: 8, target: 219.5, timeStopHours: 240 }));
+    const placed: ProposedOrder[] = [];
+    const broker = fakeBroker({ equity: 100000, cash: 100000, positions: [shortPosition] }, placed);
+    (broker as { getOpenOrders: unknown }).getOpenOrders = async (): Promise<BrokerOrder[]> => [
+      {
+        id: 'prev-exit',
+        ticker: 'FSLR',
+        side: 'buy',
+        qty: 4,
+        limitPrice: 219.25,
+        status: 'new',
+        submittedAt: NOW.toISOString(),
+        clientOrderId: 'exit-prev',
+        filledQty: 0,
+      },
+    ];
+    await runTick({
+      cfg: passiveCfg(),
+      now: NOW,
+      broker,
+      marketData: fakeMd([quote('FSLR', 219.0, 219.5)]),
+      llm: {} as never,
+    });
+    expect(placed).toHaveLength(1);
+    expect(placed[0]!.limitPrice).toBe(219.5); // second attempt crosses
+    expect(readAudit()).toContain('"escalated":true');
+  });
+
+  it('risk triggers always cross, flag on or not', async () => {
+    writeThesis(fslrThesis({ hardStopPct: 8, timeStopHours: 240 }));
+    const placed: ProposedOrder[] = [];
+    await runTick({
+      cfg: passiveCfg(),
+      now: NOW,
+      broker: fakeBroker({ equity: 100000, cash: 100000, positions: [shortPosition] }, placed),
+      // short loss at ask 241.25 vs entry 222.23 = +8.6% >= 8 -> hard_stop
+      marketData: fakeMd([quote('FSLR', 241.0, 241.25)]),
+      llm: {} as never,
+    });
+    expect(placed).toHaveLength(1);
+    expect(placed[0]!.limitPrice).toBe(241.25); // marketable ceil(ask)
+    const audit = readAudit();
+    expect(audit).toContain('"trigger":"hard_stop"');
+    expect(audit).not.toContain('"passive"');
+  });
+
+  it('flag off is byte-identical to the marketable exit', async () => {
+    writeThesis(fslrThesis({ hardStopPct: 8, target: 219.5, timeStopHours: 240 }));
+    const placed: ProposedOrder[] = [];
+    await runTick({
+      cfg: baseCfg(),
+      now: NOW,
+      broker: fakeBroker({ equity: 100000, cash: 100000, positions: [shortPosition] }, placed),
+      marketData: fakeMd([quote('FSLR', 219.0, 219.5)]),
+      llm: {} as never,
+    });
+    expect(placed).toHaveLength(1);
+    expect(placed[0]!.limitPrice).toBe(219.5); // ceil(ask), today's behavior
   });
 });

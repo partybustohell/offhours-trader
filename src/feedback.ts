@@ -278,6 +278,56 @@ export function scoreJudgeVeto(
   };
 }
 
+// ---- implementation shortfall (pure) ---------------------------------------
+
+/** One kind:'proposed_order' audit record carrying a decision-time mid. */
+export interface DecisionRecord {
+  tsMs: number;
+  ticker: string;
+  side: 'buy' | 'sell';
+  intent: string;
+  session?: string;
+  decisionMid: number;
+}
+
+/**
+ * Direction-aware implementation shortfall of a fill against the decision-time
+ * mid, in basis points. POSITIVE = the fill cost money relative to the mid the
+ * executor saw when it decided (buy above mid / sell below mid); negative =
+ * price improvement. undefined when either price is unusable. Pure.
+ */
+export function shortfallBps(
+  side: 'buy' | 'sell',
+  decisionMid: number,
+  fillPrice: number,
+): number | undefined {
+  if (!(decisionMid > 0) || !(fillPrice > 0)) return undefined;
+  const signed = side === 'buy' ? fillPrice - decisionMid : decisionMid - fillPrice;
+  return round2((signed / decisionMid) * 10_000);
+}
+
+/**
+ * The decision a fill executes: the LATEST same-ticker, same-side
+ * proposed_order at or before the fill (60s forward tolerance for clock skew)
+ * and no older than maxAgeMs — resting passive orders can fill hours after
+ * the decision. Re-proposals (e.g. a passive exit escalating) naturally win
+ * by recency. undefined when nothing matches. Pure.
+ */
+export function nearestDecision(
+  fill: { tsMs: number; ticker: string; side: 'buy' | 'sell' },
+  decisions: DecisionRecord[],
+  maxAgeMs = 8 * 3_600_000,
+): DecisionRecord | undefined {
+  let best: DecisionRecord | undefined;
+  for (const d of decisions) {
+    if (d.ticker !== fill.ticker || d.side !== fill.side) continue;
+    if (d.tsMs > fill.tsMs + 60_000) continue;
+    if (fill.tsMs - d.tsMs > maxAgeMs) continue;
+    if (!best || d.tsMs > best.tsMs) best = d;
+  }
+  return best;
+}
+
 /**
  * Weight PROPOSAL from hit rates: 50% hit rate keeps the current weight, and
  * the adjustment is clamped to [0.5x, 1.5x] so one lucky streak cannot swing

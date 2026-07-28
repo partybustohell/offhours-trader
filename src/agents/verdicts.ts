@@ -1,4 +1,4 @@
-import type { AnalystName, CandidateFile, Direction, Verdict, VerdictFile } from '../types.js';
+import type { AnalystName, Candidate, CandidateFile, Direction, Verdict, VerdictFile } from '../types.js';
 import { ANALYSTS } from '../types.js';
 import type { Config } from '../config.js';
 import { callStructured, type LlmClient } from './llm.js';
@@ -16,9 +16,20 @@ export interface DailyBar {
 
 export type BySymbol<T> = Record<string, T> | Map<string, T>;
 
+/** Primary-document text for a candidate (universe.edgar_content). Kept
+ *  structural so this module stays decoupled from broker/edgar. */
+export interface PrimaryFiling {
+  form: string;
+  filed: string;
+  text: string;
+}
+
 export interface VerdictData {
   barsBySymbol: BySymbol<DailyBar[]>;
   newsBySymbol: BySymbol<NewsItem[]>;
+  /** Absent (or missing per symbol) = no filing text; the payload field is
+   *  simply omitted, keeping prompts byte-identical to the flag-off form. */
+  filingsBySymbol?: BySymbol<PrimaryFiling>;
 }
 
 function lookup<T>(source: BySymbol<T>, key: string): T | undefined {
@@ -125,6 +136,33 @@ function sanitizeVerdicts(raw: unknown, analyst: AnalystName, tickerSet: Set<str
   return out;
 }
 
+function verdictPayload(list: Candidate[], data: VerdictData): Record<string, unknown>[] {
+  return list.map((c) => {
+    const filing = data.filingsBySymbol
+      ? lookup(data.filingsBySymbol, c.ticker.toUpperCase()) ?? lookup(data.filingsBySymbol, c.ticker)
+      : undefined;
+    return {
+      ticker: c.ticker,
+      lastPrice: c.lastPrice,
+      avgDollarVolume20d: c.avgDollarVolume20d,
+      nominatedBy: c.nominatedBy,
+      bars: summarizeBars(lookup(data.barsBySymbol, c.ticker) ?? []),
+      news: (lookup(data.newsBySymbol, c.ticker) ?? []).slice(0, 10).map((n) => ({
+        headline: n.headline,
+        summary: n.summary,
+        created_at: n.created_at,
+        source: n.source,
+        // Primary text (universe.news_content): stripped article body so the
+        // panel reads actual guidance language, not just the headline.
+        ...(n.content ? { content: n.content } : {}),
+      })),
+      // SEC primary document (universe.edgar_content): the candidate's recent
+      // 8-K / press-release exhibit text, straight from the filing.
+      ...(filing ? { primaryFiling: { form: filing.form, filed: filing.filed, text: filing.text } } : {}),
+    };
+  });
+}
+
 export async function runVerdicts(
   cfg: Config,
   candidates: CandidateFile,
@@ -135,71 +173,76 @@ export async function runVerdicts(
     return { date: candidates.date, verdicts: [], droppedAnalysts: [] };
   }
 
-  const tickers = candidates.candidates.map((c) => c.ticker.toUpperCase());
-  const tickerSet = new Set(tickers);
+  // CHUNKED verdict round: at most verdict_chunk_size candidates per LLM call,
+  // so the per-candidate output budget (~900 tokens/candidate, measured after
+  // the 2026-07-27 truncation incident) can always be honored. The old single
+  // call capped maxTokens at 16k, which the formula's own model exceeds from
+  // ~18 candidates (18*900 = 16.2k) — the incident class was latent again the
+  // moment max_candidates rose to 25. Chunks are self-contained (verdicts are
+  // per-candidate; the instructions never require cross-candidate context) and
+  // run SEQUENTIALLY per analyst so concurrency stays at 5, same as before.
+  const chunkSize = Math.max(1, cfg.universe.verdict_chunk_size);
+  const chunks: Candidate[][] = [];
+  for (let i = 0; i < candidates.candidates.length; i += chunkSize) {
+    chunks.push(candidates.candidates.slice(i, i + chunkSize));
+  }
 
-  const payload = candidates.candidates.map((c) => ({
-    ticker: c.ticker,
-    lastPrice: c.lastPrice,
-    avgDollarVolume20d: c.avgDollarVolume20d,
-    nominatedBy: c.nominatedBy,
-    bars: summarizeBars(lookup(data.barsBySymbol, c.ticker) ?? []),
-    news: (lookup(data.newsBySymbol, c.ticker) ?? []).slice(0, 10).map((n) => ({
-      headline: n.headline,
-      summary: n.summary,
-      created_at: n.created_at,
-      source: n.source,
-      // Primary text (universe.news_content): stripped article body so the
-      // panel reads actual guidance language, not just the headline.
-      ...(n.content ? { content: n.content } : {}),
-    })),
-  }));
-
-  const user = [
-    VERDICT_INSTRUCTIONS,
-    `Candidate set (${tickers.length} tickers): ${tickers.join(', ')}`,
-    'Per-candidate data (JSON):',
-    JSON.stringify(payload),
-  ].join('\n\n');
-
-  // Output scales with the CANDIDATE COUNT (one verdict object per ticker,
-  // evidence + invalidation arrays each), not with input size. The old flat
-  // 4000 truncated verbose personas at 13 candidates (2026-07-27 21:05 run:
-  // three analysts came back empty, every ticker failed quorum).
-  const verdictMaxTokens = Math.min(16_000, Math.max(4000, tickers.length * 900));
-
-  const results = await Promise.allSettled(
-    ANALYSTS.map(async (analyst): Promise<Verdict[]> => {
-      const raw = await callStructured<unknown>(
-        {
-          // Per-persona override (ensemble diversity); default falls back.
-          model: cfg.model.analysts_by_name[analyst] ?? cfg.model.analysts,
-          system: ANALYST_SYSTEM[analyst],
-          user,
-          toolName: 'submit_verdicts',
-          toolSchema: verdictSchema(tickers),
-          maxTokens: verdictMaxTokens,
-        },
-        client,
-      );
-      const sanitized = sanitizeVerdicts(raw, analyst, tickerSet);
-      // Zero verdicts against a non-empty candidate set is a malfunction, not
-      // an opinion — the instructions require one verdict per candidate
-      // ("none" is the abstention channel). Count it as a drop so quorum math
-      // and the degraded-refresh carryover see the failure.
-      if (sanitized.length === 0) {
-        throw new Error(`analyst ${analyst} returned zero verdicts for ${tickers.length} candidates`);
+  const perAnalyst = await Promise.all(
+    ANALYSTS.map(async (analyst): Promise<{ verdicts: Verdict[]; failedChunks: number }> => {
+      const verdicts: Verdict[] = [];
+      let failedChunks = 0;
+      for (const chunk of chunks) {
+        const chunkTickers = chunk.map((c) => c.ticker.toUpperCase());
+        const user = [
+          VERDICT_INSTRUCTIONS,
+          `Candidate set (${chunkTickers.length} tickers): ${chunkTickers.join(', ')}`,
+          'Per-candidate data (JSON):',
+          JSON.stringify(verdictPayload(chunk, data)),
+        ].join('\n\n');
+        try {
+          const raw = await callStructured<unknown>(
+            {
+              // Per-persona override (ensemble diversity); default falls back.
+              model: cfg.model.analysts_by_name[analyst] ?? cfg.model.analysts,
+              system: ANALYST_SYSTEM[analyst],
+              user,
+              toolName: 'submit_verdicts',
+              toolSchema: verdictSchema(chunkTickers),
+              // Per-chunk output budget; the 16k ceiling is unreachable at the
+              // default chunk size (8 * 900 = 7.2k) and guards only degenerate
+              // configs that set verdict_chunk_size near max_candidates.
+              maxTokens: Math.min(16_000, Math.max(4000, chunkTickers.length * 900)),
+            },
+            client,
+          );
+          const sanitized = sanitizeVerdicts(raw, analyst, new Set(chunkTickers));
+          // Zero verdicts against a non-empty chunk is a malfunction, not an
+          // opinion — the instructions require one verdict per candidate
+          // ("none" is the abstention channel). Count the chunk as failed.
+          if (sanitized.length === 0) {
+            throw new Error(
+              `analyst ${analyst} returned zero verdicts for ${chunkTickers.length} candidates`,
+            );
+          }
+          verdicts.push(...sanitized);
+        } catch {
+          failedChunks++;
+        }
       }
-      return sanitized;
+      return { verdicts, failedChunks };
     }),
   );
 
+  // An analyst with ANY failed chunk is counted as dropped: their evidence is
+  // incomplete, and quorum math plus the degraded-refresh carryover must see
+  // that. Verdicts from their SUCCESSFUL chunks are still kept — quorum is
+  // per-ticker and verified evidence is never discarded.
   const verdicts: Verdict[] = [];
   const droppedAnalysts: AnalystName[] = [];
   ANALYSTS.forEach((analyst, i) => {
-    const result = results[i];
-    if (result?.status === 'fulfilled') verdicts.push(...result.value);
-    else droppedAnalysts.push(analyst);
+    const result = perAnalyst[i]!;
+    verdicts.push(...result.verdicts);
+    if (result.failedChunks > 0) droppedAnalysts.push(analyst);
   });
 
   return { date: candidates.date, verdicts, droppedAnalysts };

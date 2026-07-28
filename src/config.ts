@@ -10,6 +10,13 @@ export const ConfigSchema = z.object({
     .object({
       nominations_per_agent: z.number().int().min(1).max(10).default(5),
       max_candidates: z.number().int().min(1).max(50).default(15),
+      // Verdict-round chunking: at most this many candidates per LLM call, so
+      // the per-candidate output budget (~900 tokens each) always fits without
+      // hitting the response cap. 8 * 900 = 7.2k tokens per call — the
+      // truncation class behind the 2026-07-27 quorum collapse is structurally
+      // unreachable at the default. Raising it toward max_candidates restores
+      // the old single-call behavior (and its saturation risk).
+      verdict_chunk_size: z.number().int().min(1).max(50).default(8),
       min_price: z.number().positive().default(5),
       min_avg_dollar_volume: z.number().positive().default(20_000_000),
       exclude: z.array(z.string()).default([]),
@@ -31,6 +38,21 @@ export const ConfigSchema = z.object({
         .object({
           enabled: z.boolean().default(false),
           max_chars: z.number().int().min(200).max(10_000).default(1500),
+        })
+        .default({}),
+      // SEC EDGAR primary text (registry row edgar-content-2026-07-28): feed
+      // the verdict round each candidate's recent 8-K / press-release exhibit
+      // — the PRIMARY document, not a vendor paraphrase. Same family as
+      // news_content (information provision; the panel still decides; no
+      // parameters to fit) but sourced from the filing itself. Fail-open per
+      // ticker; sequential fetches respect SEC fair-access limits. Default
+      // OFF: changes verdict prompt bytes (backtest LLM caches re-run) and
+      // ships behind its registry row.
+      edgar_content: z
+        .object({
+          enabled: z.boolean().default(false),
+          lookback_days: z.number().int().min(0).max(10).default(2),
+          max_chars: z.number().int().min(500).max(20_000).default(4000),
         })
         .default({}),
     })
@@ -280,6 +302,21 @@ export const ConfigSchema = z.object({
       // 1.0 = today's marketable band-clamp (all existing behavior); <1 rests
       // more passively inside the spread. SIP-sensitive; keep 1.0 on IEX.
       entry_aggressiveness: z.number().min(0).max(1).default(1),
+      // Passive-first EXITS for non-risk triggers (target / time_stop / judge):
+      // the first exit attempt rests inside the spread at `aggressiveness`
+      // (0.5 = mid) instead of crossing; if it is still unfilled when the
+      // trigger re-fires on a later tick, the exit escalates to marketable.
+      // Risk triggers (hard_stop / invalidation_price / trail) ALWAYS cross —
+      // urgency beats cost. Symmetric to entry_aggressiveness: the marketable
+      // default paid the full spread on every non-urgent exit by construction.
+      // Ships OFF: exit-path changes go through the paired-backtest / soak
+      // discipline (trial-registry passive-exits-2026-07-28).
+      exit_passive: z
+        .object({
+          enabled: z.boolean().default(false),
+          aggressiveness: z.number().min(0).max(1).default(0.5),
+        })
+        .default({}),
       gates_by_session: z
         .object({
           enabled: z.boolean().default(false), // SIP-only; OFF -> flat gates apply
@@ -383,6 +420,19 @@ export const ConfigSchema = z.object({
           min_exit_top_size: z.number().min(0).default(0),
         })
         .default({}),
+      // Data-quality gate on the trailing-PEAK ratchet (live executor only):
+      // a quote may only advance the persisted favorable peak when the
+      // displayed size behind the mark clears min_top_size. The peak never
+      // decays, so one junk print would otherwise poison it permanently —
+      // inflating the trail retrace and the ratcheted GTC stop level. 0 (the
+      // default) is byte-identical to today. Crossed books are dropped
+      // unconditionally upstream (partitionFreshQuotes) — invalid NBBO
+      // snapshots are not prices and need no flag.
+      peak_sanity: z
+        .object({
+          min_top_size: z.number().min(0).default(0),
+        })
+        .default({}),
       // Scale-out at target (Tier-3 machinery, ships FLAG-OFF): when enabled,
       // the target trigger exits only target_fraction of the position ONCE
       // (persisted marker), and the trail/time-stop/hard-stop manage the
@@ -432,6 +482,15 @@ export const ConfigSchema = z.object({
       analysts: z.string().default('claude-sonnet-5'),
       synthesizer: z.string().default('claude-fable-5'),
       executor: z.string().default('claude-sonnet-5'),
+      // Model-deprecation BRIDGE (registry row model-bridge-2026-07-28): when
+      // set, the pipeline re-runs the verdict round on this model with inputs
+      // identical to the primary round, writes verdicts-shadow-<ymd>.json, and
+      // audits agreement stats. NOTHING from the shadow round is traded and a
+      // shadow failure never blocks the pipeline. Purpose: when the frozen
+      // primary model is deprecated by the vendor, weeks of paired shadow
+      // output are the evidence for arguing OOS-counter continuity instead of
+      // the full reset rule 1 would otherwise force. Unset = off (no cost).
+      shadow_analysts: z.string().optional(),
       // Per-persona model overrides for ensemble diversity experiments: a set
       // analyst uses its own model, unset analysts fall back to `analysts`.
       // Ships EMPTY (no live change) — enabling is an A/B decision that goes

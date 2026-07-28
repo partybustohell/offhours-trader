@@ -145,6 +145,9 @@ async function main(): Promise<void> {
       placeStopOrder: async (): Promise<never> => {
         throw new Error('subagent dry broker: placeStopOrder unsupported');
       },
+      replaceStopOrder: async (): Promise<never> => {
+        throw new Error('subagent dry broker: replaceStopOrder unsupported');
+      },
       cancelOrder: async (): Promise<void> => {},
       getAsset: async () => ({ shortable: true, easyToBorrow: true }),
       placeLimitOrder: async (o: ProposedOrder): Promise<BrokerOrder> => {

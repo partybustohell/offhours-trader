@@ -79,6 +79,55 @@ export function shadowEntryRecord(
   };
 }
 
+// ---- shadow-MODEL bridge (model deprecation) -------------------------------
+
+export interface VerdictAgreement {
+  /** (analyst, ticker) pairs present in BOTH verdict sets. */
+  pairs: number;
+  /** Fraction of joint pairs with the same direction; null when pairs = 0. */
+  directionMatchPct: number | null;
+  /** Mean |conviction delta| over joint pairs; null when pairs = 0. */
+  meanAbsConvictionDelta: number | null;
+  /** Directional (long/short) verdict counts per side, for base-rate context. */
+  directionalPrimary: number;
+  directionalShadow: number;
+}
+
+/**
+ * Agreement between the primary verdict round and a shadow-model re-run on
+ * identical inputs — the continuity evidence for a model swap (registry row
+ * model-bridge-2026-07-28): run the candidate model in shadow for a few weeks,
+ * and if agreement is high the swap can argue for counter continuity instead
+ * of a full OOS reset. Joined on (analyst, ticker). Pure.
+ */
+export function verdictAgreement(
+  primary: { analyst: string; ticker: string; direction: string; conviction: number }[],
+  shadow: { analyst: string; ticker: string; direction: string; conviction: number }[],
+): VerdictAgreement {
+  const key = (v: { analyst: string; ticker: string }) =>
+    `${v.analyst}|${v.ticker.toUpperCase()}`;
+  const shadowByKey = new Map(shadow.map((v) => [key(v), v]));
+  let pairs = 0;
+  let matches = 0;
+  let deltaSum = 0;
+  for (const p of primary) {
+    const s = shadowByKey.get(key(p));
+    if (!s) continue;
+    pairs++;
+    if (p.direction === s.direction) matches++;
+    deltaSum += Math.abs(p.conviction - s.conviction);
+  }
+  const directional = (vs: { direction: string }[]) =>
+    vs.filter((v) => v.direction === 'long' || v.direction === 'short').length;
+  return {
+    pairs,
+    directionMatchPct: pairs > 0 ? round4(matches / pairs) : null,
+    meanAbsConvictionDelta: pairs > 0 ? round4(deltaSum / pairs) : null,
+    directionalPrimary: directional(primary),
+    directionalShadow: directional(shadow),
+  };
+}
+
 /** Regime computed with every sub-signal force-enabled (params = defaults). */
 export function shadowRegime(spyCloses: number[], cfg: Config): Regime {
   if (spyCloses.length === 0) return NEUTRAL_REGIME;
