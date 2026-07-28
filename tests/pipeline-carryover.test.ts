@@ -35,4 +35,14 @@ describe('carryoverEntries (same-day thesis refresh safety)', () => {
   it('matches case-insensitively', () => {
     expect(carryoverEntries([entry('aaa')], [], new Set(['AAA']))).toHaveLength(1);
   });
+
+  it('degraded refresh carries ALL previous entries, held or not', () => {
+    const previous = [entry('AAA'), entry('BBB')];
+    // Healthy refresh: pending (unheld) entries are replaced, i.e. dropped.
+    expect(carryoverEntries(previous, [], new Set())).toEqual([]);
+    // Degraded refresh (>=2 analysts dropped): a broken re-run must never
+    // erase a healthy thesis — everything not re-emitted is carried.
+    const carried = carryoverEntries(previous, [entry('BBB')], new Set(), true);
+    expect(carried.map((e) => e.ticker)).toEqual(['AAA']);
+  });
 });

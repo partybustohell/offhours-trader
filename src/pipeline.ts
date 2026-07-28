@@ -44,10 +44,19 @@ export function carryoverEntries(
   previous: ThesisEntry[],
   fresh: ThesisEntry[],
   activeTickers: Set<string>,
+  // Degraded refresh (>=2 analysts dropped in the verdict round): the re-run's
+  // evidence is broken, so carry ALL previous entries it failed to re-emit —
+  // a malfunctioning refresh must never erase a healthy thesis (observed
+  // 2026-07-27: the 21:05 pass lost three analysts to truncation, skipped
+  // every candidate on quorum, and wiped the 16:35 NUE catalyst entry).
+  // A HEALTHY refresh still replaces pending entries by design.
+  carryAllOnDegraded = false,
 ): ThesisEntry[] {
   const freshTickers = new Set(fresh.map((e) => e.ticker.toUpperCase()));
   return previous.filter(
-    (e) => activeTickers.has(e.ticker.toUpperCase()) && !freshTickers.has(e.ticker.toUpperCase()),
+    (e) =>
+      !freshTickers.has(e.ticker.toUpperCase()) &&
+      (carryAllOnDegraded || activeTickers.has(e.ticker.toUpperCase())),
   );
 }
 
@@ -179,17 +188,19 @@ export async function runPipeline(deps: PipelineDeps = {}): Promise<Thesis> {
       return null; // corrupt previous file: refresh proceeds without carryover
     }
   };
-  const withCarryover = (fresh: ThesisEntry[]): ThesisEntry[] => {
+  const withCarryover = (fresh: ThesisEntry[], degradedRefresh = false): ThesisEntry[] => {
     const previous = readPreviousSameDay();
     if (!previous) return fresh;
-    const carried = carryoverEntries(previous.entries, fresh, activeTickers);
+    const carried = carryoverEntries(previous.entries, fresh, activeTickers, degradedRefresh);
     if (carried.length > 0) {
       appendAudit({
         kind: 'tick',
         data: {
-          stage: 'carried_entries',
+          stage: degradedRefresh ? 'degraded_refresh_carryover' : 'carried_entries',
           tickers: carried.map((e) => e.ticker),
-          note: 'held/ordered entries preserved across same-day thesis refresh',
+          note: degradedRefresh
+            ? 'verdict round degraded (>=2 analysts dropped): previous same-day entries preserved wholesale'
+            : 'held/ordered entries preserved across same-day thesis refresh',
         },
       });
     }
@@ -336,7 +347,7 @@ export async function runPipeline(deps: PipelineDeps = {}): Promise<Thesis> {
     kind,
     generatedAt: now.toISOString(),
     expiresAt,
-    entries: withCarryover(entries),
+    entries: withCarryover(entries, verdictFile.droppedAnalysts.length >= 2),
     skipped: computed.skipped,
     regime: {
       state: regime.state,

@@ -162,6 +162,12 @@ export async function runVerdicts(
     JSON.stringify(payload),
   ].join('\n\n');
 
+  // Output scales with the CANDIDATE COUNT (one verdict object per ticker,
+  // evidence + invalidation arrays each), not with input size. The old flat
+  // 4000 truncated verbose personas at 13 candidates (2026-07-27 21:05 run:
+  // three analysts came back empty, every ticker failed quorum).
+  const verdictMaxTokens = Math.min(16_000, Math.max(4000, tickers.length * 900));
+
   const results = await Promise.allSettled(
     ANALYSTS.map(async (analyst): Promise<Verdict[]> => {
       const raw = await callStructured<unknown>(
@@ -172,11 +178,19 @@ export async function runVerdicts(
           user,
           toolName: 'submit_verdicts',
           toolSchema: verdictSchema(tickers),
-          maxTokens: 4000,
+          maxTokens: verdictMaxTokens,
         },
         client,
       );
-      return sanitizeVerdicts(raw, analyst, tickerSet);
+      const sanitized = sanitizeVerdicts(raw, analyst, tickerSet);
+      // Zero verdicts against a non-empty candidate set is a malfunction, not
+      // an opinion — the instructions require one verdict per candidate
+      // ("none" is the abstention channel). Count it as a drop so quorum math
+      // and the degraded-refresh carryover see the failure.
+      if (sanitized.length === 0) {
+        throw new Error(`analyst ${analyst} returned zero verdicts for ${tickers.length} candidates`);
+      }
+      return sanitized;
     }),
   );
 

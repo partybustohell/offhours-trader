@@ -143,7 +143,9 @@ export async function writeNarratives(
         user,
         toolName: 'submit_narratives',
         toolSchema: NARRATIVE_SCHEMA,
-        maxTokens: 4000,
+        // Output scales with entry count (narrative + conditions + exit block
+        // per ticker); truncation now throws in callStructured and falls back.
+        maxTokens: Math.min(16_000, Math.max(4000, computedEntries.length * 1200)),
       },
       client,
     );

@@ -68,6 +68,17 @@ export async function callStructured<T>(
         ],
         tool_choice: { type: 'tool', name: opts.toolName },
       });
+      // A truncated response is a FAILED structured call, not a quiet empty:
+      // the API stops mid-tool-input and the partial parse can surface as an
+      // empty input object, which downstream sanitizers can't tell apart from
+      // a genuine empty answer (observed 2026-07-27: three analysts silently
+      // returned zero verdicts and quorum collapsed). Throw so callers count
+      // the analyst as dropped and degradation stays visible.
+      if (response.stop_reason === 'max_tokens') {
+        throw new Error(
+          `output truncated at max_tokens for tool ${opts.toolName} (raise maxTokens)`,
+        );
+      }
       const block = response.content.find((b) => b.type === 'tool_use');
       if (!block || block.type !== 'tool_use') {
         throw new Error(`no tool_use block in response for tool ${opts.toolName}`);
